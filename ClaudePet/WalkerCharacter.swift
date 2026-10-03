@@ -21,6 +21,22 @@ class PopoverDragTitleBarView: NSView {
     }
 }
 
+class ActionButton: NSButton {
+    private var onClick: (() -> Void)?
+
+    convenience init(symbol: String, label: String, onClick: @escaping () -> Void) {
+        self.init(frame: .zero)
+        image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+        imagePosition = .imageOnly
+        isBordered = false
+        self.onClick = onClick
+        target = self
+        action = #selector(fire)
+    }
+
+    @objc private func fire() { onClick?() }
+}
+
 class WalkerCharacter {
     var window: NSWindow!
     var spriteLayer: CALayer!
@@ -45,6 +61,7 @@ class WalkerCharacter {
     var decelStart: CFTimeInterval = 7.5
     var walkStop: CFTimeInterval = 8.25
     var characterColor: NSColor = .gray
+    var name = "Claude"
 
     // Walk state - now 2D across entire screen
     var walkStartTime: CFTimeInterval = 0
@@ -98,6 +115,9 @@ class WalkerCharacter {
     var isClaudeBusy: Bool { claudeSession?.isBusy ?? false }
     var thinkingBubbleWindow: NSWindow?
     var popoverPinnedOrigin: NSPoint?
+    private weak var popoverStatusLabel: NSTextField?
+    private weak var popoverStatusDot: NSView?
+    private var shownBusyState: Bool?
 
     init(
         spriteIdleName: String,
@@ -251,7 +271,7 @@ class WalkerCharacter {
 
     func handleClick() {
         if isOnboarding {
-            openOnboardingPopover()
+            if isIdleForPopover { closeOnboarding() } else { openOnboardingPopover() }
             return
         }
         if isIdleForPopover {
@@ -275,8 +295,7 @@ class WalkerCharacter {
         }
 
         // Show static welcome message instead of Claude terminal
-        terminalView?.inputField.isEditable = false
-        terminalView?.inputField.placeholderString = ""
+        terminalView?.inputBar.isHidden = true
         let welcome = """
         aloha! i'm stitch — your naughty lil desktop pet! claude is roaming too.
 
@@ -289,9 +308,10 @@ class WalkerCharacter {
         terminalView?.appendStreamingText(welcome)
 
         updatePopoverPosition()
-        popoverWindow?.orderFrontRegardless()
+        fadeInPopover()
 
         // Set up click-outside to dismiss and complete onboarding
+        removeEventMonitors()
         clickOutsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
             self?.closeOnboarding()
         }
@@ -302,8 +322,7 @@ class WalkerCharacter {
     }
 
     private func closeOnboarding() {
-        if let monitor = clickOutsideMonitor { NSEvent.removeMonitor(monitor); clickOutsideMonitor = nil }
-        if let monitor = escapeKeyMonitor { NSEvent.removeMonitor(monitor); escapeKeyMonitor = nil }
+        removeEventMonitors()
         popoverWindow?.orderOut(nil)
         popoverWindow = nil
         terminalView = nil
@@ -348,7 +367,7 @@ class WalkerCharacter {
         }
 
         updatePopoverPosition()
-        popoverWindow?.orderFrontRegardless()
+        fadeInPopover()
         popoverWindow?.makeKey()
 
         if let terminal = terminalView {
@@ -413,14 +432,33 @@ class WalkerCharacter {
         }
     }
 
+    private func fadeInPopover() {
+        guard let win = popoverWindow else { return }
+        win.alphaValue = 0
+        win.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.16
+            win.animator().alphaValue = 1
+        }
+    }
+
+    private func refreshPopoverStatus() {
+        guard let label = popoverStatusLabel, shownBusyState != isClaudeBusy else { return }
+        shownBusyState = isClaudeBusy
+        let t = resolvedTheme
+        label.stringValue = isClaudeBusy ? "thinking…" : t.titleString
+        popoverStatusDot?.layer?.backgroundColor = (isClaudeBusy ? t.accentColor : t.successColor).cgColor
+    }
+
     var resolvedTheme: PopoverTheme {
         PopoverTheme.current.withCharacterColor(characterColor).withCustomFont()
     }
 
     func createPopoverWindow() {
         let t = resolvedTheme
-        let popoverWidth: CGFloat = 420
-        let popoverHeight: CGFloat = 310
+        let popoverWidth: CGFloat = 400
+        let popoverHeight: CGFloat = 340
+        let headerHeight: CGFloat = 48
 
         let win = KeyableWindow(
             contentRect: CGRect(x: 0, y: 0, width: popoverWidth, height: popoverHeight),
@@ -440,14 +478,14 @@ class WalkerCharacter {
         container.wantsLayer = true
         container.layer?.backgroundColor = t.popoverBg.cgColor
         container.layer?.cornerRadius = t.popoverCornerRadius
+        container.layer?.cornerCurve = .continuous
         container.layer?.masksToBounds = true
         container.layer?.borderWidth = t.popoverBorderWidth
         container.layer?.borderColor = t.popoverBorder.cgColor
         container.autoresizingMask = [.width, .height]
 
-        let titleBar = PopoverDragTitleBarView(frame: NSRect(x: 0, y: popoverHeight - 28, width: popoverWidth, height: 28))
-        titleBar.wantsLayer = true
-        titleBar.layer?.backgroundColor = t.titleBarBg.cgColor
+        let titleBar = PopoverDragTitleBarView(frame: NSRect(x: 0, y: popoverHeight - headerHeight, width: popoverWidth, height: headerHeight))
+        titleBar.autoresizingMask = [.width, .minYMargin]
         titleBar.onDragChanged = { [weak self, weak win] newOrigin in
             guard let self = self, let win = win else { return }
             guard let screen = NSScreen.main else {
@@ -466,18 +504,49 @@ class WalkerCharacter {
         }
         container.addSubview(titleBar)
 
-        let titleLabel = NSTextField(labelWithString: t.titleString)
-        titleLabel.font = t.titleFont
-        titleLabel.textColor = t.titleText
-        titleLabel.frame = NSRect(x: 12, y: 6, width: 200, height: 16)
-        titleBar.addSubview(titleLabel)
+        let avatar = NSView(frame: NSRect(x: 14, y: (headerHeight - 32) / 2, width: 32, height: 32))
+        avatar.wantsLayer = true
+        avatar.layer?.backgroundColor = t.titleBarBg.cgColor
+        avatar.layer?.cornerRadius = 16
+        avatar.layer?.masksToBounds = true
+        avatar.layer?.contents = spriteImages.first
+        avatar.layer?.contentsGravity = .resizeAspect
+        titleBar.addSubview(avatar)
 
-        let sep = NSView(frame: NSRect(x: 0, y: popoverHeight - 29, width: popoverWidth, height: 1))
+        let nameLabel = NSTextField(labelWithString: name)
+        nameLabel.font = NSFont(descriptor: t.titleFont.fontDescriptor, size: 13) ?? t.titleFont
+        nameLabel.textColor = t.titleText
+        nameLabel.frame = NSRect(x: 56, y: headerHeight / 2, width: 240, height: 17)
+        titleBar.addSubview(nameLabel)
+
+        let statusDot = NSView(frame: NSRect(x: 57, y: headerHeight / 2 - 11, width: 7, height: 7))
+        statusDot.wantsLayer = true
+        statusDot.layer?.cornerRadius = 3.5
+        titleBar.addSubview(statusDot)
+
+        let statusLabel = NSTextField(labelWithString: "")
+        statusLabel.font = .systemFont(ofSize: 10.5, weight: .medium)
+        statusLabel.textColor = t.textDim
+        statusLabel.frame = NSRect(x: 69, y: headerHeight / 2 - 15, width: 220, height: 14)
+        titleBar.addSubview(statusLabel)
+
+        let closeButton = ActionButton(symbol: "xmark", label: "Close") { [weak self] in
+            guard let self else { return }
+            if self.isOnboarding { self.closeOnboarding() } else { self.closePopover() }
+        }
+        closeButton.symbolConfiguration = .init(pointSize: 11, weight: .semibold)
+        closeButton.contentTintColor = t.textDim
+        closeButton.frame = NSRect(x: popoverWidth - 36, y: (headerHeight - 22) / 2, width: 22, height: 22)
+        closeButton.autoresizingMask = [.minXMargin]
+        titleBar.addSubview(closeButton)
+
+        let sep = NSView(frame: NSRect(x: 0, y: popoverHeight - headerHeight - 1, width: popoverWidth, height: 1))
         sep.wantsLayer = true
         sep.layer?.backgroundColor = t.separatorColor.cgColor
+        sep.autoresizingMask = [.width, .minYMargin]
         container.addSubview(sep)
 
-        let terminal = TerminalView(frame: NSRect(x: 0, y: 0, width: popoverWidth, height: popoverHeight - 29))
+        let terminal = TerminalView(frame: NSRect(x: 0, y: 0, width: popoverWidth, height: popoverHeight - headerHeight - 1))
         terminal.characterColor = characterColor
         terminal.autoresizingMask = [.width, .height]
         terminal.onSendMessage = { [weak self] message in
@@ -488,6 +557,10 @@ class WalkerCharacter {
         win.contentView = container
         popoverWindow = win
         terminalView = terminal
+        popoverStatusLabel = statusLabel
+        popoverStatusDot = statusDot
+        shownBusyState = nil
+        refreshPopoverStatus()
     }
 
     private func wireSession(_ session: ClaudeSession) {
@@ -974,6 +1047,7 @@ class WalkerCharacter {
     func update() {
         guard let screen = activeScreen else { return }
         let screenFrame = screen.frame
+        refreshPopoverStatus()
 
         // If user dragged character to custom position, keep animation playing at that spot
         if isPinnedByUser {

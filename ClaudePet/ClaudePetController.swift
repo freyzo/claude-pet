@@ -32,6 +32,7 @@ class ClaudePetController {
         stitch.videoDuration = 8.75
         stitch.characterColor = NSColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1.0)
         stitch.naughtiness = 1.0
+        stitch.name = "Stitch"
         stitch.positionX = 0.35
         stitch.positionY = 0.3
         stitch.pauseEndTime = CACurrentMediaTime() + Double.random(in: 0.5...1.5)

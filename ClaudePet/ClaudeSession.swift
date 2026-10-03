@@ -156,7 +156,8 @@ class ClaudeSession {
 
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty else { return }
+            // Empty read = EOF; detach or the handler fires forever.
+            guard !data.isEmpty else { handle.readabilityHandler = nil; return }
             if let text = String(data: data, encoding: .utf8) {
                 DispatchQueue.main.async {
                     self?.processOutput(text)
@@ -166,7 +167,7 @@ class ClaudeSession {
 
         errPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty else { return }
+            guard !data.isEmpty else { handle.readabilityHandler = nil; return }
             if let text = String(data: data, encoding: .utf8) {
                 DispatchQueue.main.async {
                     self?.onError?(text)

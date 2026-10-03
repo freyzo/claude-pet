@@ -43,7 +43,10 @@ class PaddedTextFieldCell: NSTextFieldCell {
 class TerminalView: NSView {
     let scrollView = NSScrollView()
     let textView = NSTextView()
+    let inputBar = NSView()
     let inputField = NSTextField()
+    private let sendButton = NSButton()
+    private let emptyStateLabel = NSTextField(wrappingLabelWithString: "Ask me anything.\nI can read files, run commands and write code.")
     var onSendMessage: ((String) -> Void)?
 
     private var currentAssistantText = ""
@@ -70,13 +73,14 @@ class TerminalView: NSView {
 
     private func setupViews() {
         let t = theme
-        let inputHeight: CGFloat = 30
-        let padding: CGFloat = 10
+        let inputHeight: CGFloat = 34
+        let padding: CGFloat = 14
+        let inputBottom: CGFloat = 12
 
         scrollView.frame = NSRect(
-            x: padding, y: inputHeight + padding + 6,
-            width: frame.width - padding * 2,
-            height: frame.height - inputHeight - padding - 10
+            x: padding - 4, y: inputBottom + inputHeight + 8,
+            width: frame.width - (padding - 4) * 2,
+            height: frame.height - inputBottom - inputHeight - 14
         )
         scrollView.autoresizingMask = [.width, .height]
         scrollView.hasVerticalScroller = true
@@ -93,7 +97,7 @@ class TerminalView: NSView {
         textView.textColor = t.textPrimary
         textView.font = t.font
         textView.isRichText = true
-        textView.textContainerInset = NSSize(width: 2, height: 4)
+        textView.textContainerInset = NSSize(width: 6, height: 10)
         let defaultPara = NSMutableParagraphStyle()
         defaultPara.paragraphSpacing = 8
         textView.defaultParagraphStyle = defaultPara
@@ -109,11 +113,24 @@ class TerminalView: NSView {
         scrollView.documentView = textView
         addSubview(scrollView)
 
-        inputField.frame = NSRect(
-            x: padding, y: 6,
-            width: frame.width - padding * 2,
-            height: inputHeight
-        )
+        emptyStateLabel.font = t.font
+        emptyStateLabel.textColor = t.textDim
+        emptyStateLabel.alignment = .center
+        emptyStateLabel.frame = NSRect(x: padding + 20, y: scrollView.frame.midY - 20, width: frame.width - (padding + 20) * 2, height: 40)
+        emptyStateLabel.autoresizingMask = [.width, .minYMargin, .maxYMargin]
+        addSubview(emptyStateLabel)
+
+        let barWidth = frame.width - padding * 2
+        inputBar.frame = NSRect(x: padding, y: inputBottom, width: barWidth, height: inputHeight)
+        inputBar.autoresizingMask = [.width]
+        inputBar.wantsLayer = true
+        inputBar.layer?.backgroundColor = t.inputBg.cgColor
+        inputBar.layer?.cornerRadius = inputHeight / 2
+        inputBar.layer?.borderWidth = 1
+        inputBar.layer?.borderColor = t.separatorColor.cgColor
+        addSubview(inputBar)
+
+        inputField.frame = NSRect(x: 6, y: (inputHeight - 22) / 2, width: barWidth - 6 - 34, height: 22)
         inputField.autoresizingMask = [.width]
         inputField.focusRingType = .none
         let paddedCell = PaddedTextFieldCell(textCell: "")
@@ -124,13 +141,24 @@ class TerminalView: NSView {
         paddedCell.drawsBackground = false
         paddedCell.isBezeled = false
         paddedCell.placeholderAttributedString = NSAttributedString(
-            string: "Ask Claude...",
+            string: "Ask Claude…",
             attributes: [.font: t.font, .foregroundColor: t.textDim]
         )
         inputField.cell = paddedCell
         inputField.target = self
         inputField.action = #selector(inputSubmitted)
-        addSubview(inputField)
+        inputBar.addSubview(inputField)
+
+        sendButton.image = NSImage(systemSymbolName: "arrow.up.circle.fill", accessibilityDescription: "Send")
+        sendButton.symbolConfiguration = .init(pointSize: 20, weight: .regular)
+        sendButton.imagePosition = .imageOnly
+        sendButton.isBordered = false
+        sendButton.contentTintColor = t.accentColor
+        sendButton.frame = NSRect(x: barWidth - 32, y: (inputHeight - 28) / 2, width: 28, height: 28)
+        sendButton.autoresizingMask = [.minXMargin]
+        sendButton.target = self
+        sendButton.action = #selector(inputSubmitted)
+        inputBar.addSubview(sendButton)
     }
 
     // MARK: - Input
@@ -250,6 +278,7 @@ class TerminalView: NSView {
     }
 
     private func scrollToBottom() {
+        emptyStateLabel.isHidden = (textView.textStorage?.length ?? 0) > 0
         textView.scrollToEndOfDocument(nil)
     }
 

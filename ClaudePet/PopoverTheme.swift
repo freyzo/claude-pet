@@ -64,7 +64,7 @@ struct PopoverTheme {
         name: "Peach",
         popoverBg: NSColor(red: 1.0, green: 0.97, blue: 0.92, alpha: 0.97),
         popoverBorder: NSColor(red: 0.95, green: 0.55, blue: 0.65, alpha: 0.8),
-        popoverBorderWidth: 2.5,
+        popoverBorderWidth: 1,
         popoverCornerRadius: 24,
         titleBarBg: NSColor(red: 0.98, green: 0.93, blue: 0.88, alpha: 1.0),
         titleText: NSColor(red: 0.85, green: 0.35, blue: 0.45, alpha: 1.0),
@@ -120,7 +120,7 @@ struct PopoverTheme {
         name: "Moss",
         popoverBg: NSColor(red: 0.82, green: 0.84, blue: 0.78, alpha: 0.98),
         popoverBorder: NSColor(red: 0.55, green: 0.58, blue: 0.50, alpha: 0.8),
-        popoverBorderWidth: 2,
+        popoverBorderWidth: 1,
         popoverCornerRadius: 10,
         titleBarBg: NSColor(red: 0.72, green: 0.75, blue: 0.68, alpha: 1.0),
         titleText: NSColor(red: 0.15, green: 0.17, blue: 0.12, alpha: 1.0),
@@ -158,7 +158,7 @@ struct PopoverTheme {
         let border = NSColor(red: r, green: g, blue: b, alpha: 0.6)
         return PopoverTheme(
             name: name, popoverBg: popoverBg,
-            popoverBorder: border,
+            popoverBorder: NSColor(red: r, green: g, blue: b, alpha: 0.35),
             popoverBorderWidth: popoverBorderWidth, popoverCornerRadius: popoverCornerRadius,
             titleBarBg: NSColor(red: min(r * 0.3 + 0.7, 1), green: min(g * 0.3 + 0.7, 1), blue: min(b * 0.3 + 0.7, 1), alpha: 1.0),
             titleText: color, titleFont: titleFont, titleString: titleString,
