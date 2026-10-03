@@ -1,12 +1,12 @@
 # Xcode
 build/
 DerivedData/
+.derivedData
 dist/
 *.xcodeproj/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
 *.xcworkspace/xcuserdata/
-*.xcworkspace/xcshareddata/swiftpm/
-xcuserdata/
+_0/
 
 # SPM
 .build/
@@ -17,10 +17,6 @@ xcuserdata/
 *.swp
 *~
 
-# Local debug exports
-check*-mov.png
-onecheck.png
-
 # Archives
 *.ipa
 *.dSYM.zip
@@ -29,5 +25,3 @@ onecheck.png
 # Sparkle
 *.dmg
 *.zip
-*.xcworkspace/xcshareddata/swiftpm/
-.derivedData

@@ -3,8 +3,6 @@ import Foundation
 class ClaudeSession {
     private var process: Process?
     private var inputPipe: Pipe?
-    private var outputPipe: Pipe?
-    private var errorPipe: Pipe?
     private var lineBuffer = ""
     private(set) var isRunning = false
     private(set) var isBusy = false  // true between send() and result
@@ -13,9 +11,8 @@ class ClaudeSession {
 
     var onText: ((String) -> Void)?
     var onError: ((String) -> Void)?
-    var onToolUse: ((String, [String: Any]) -> Void)?    // toolName, input
+    var onToolUse: ((String, String) -> Void)?            // toolName, summary
     var onToolResult: ((String, Bool) -> Void)?           // summary, isError
-    var onSessionReady: (() -> Void)?
     var onTurnComplete: (() -> Void)?
     var onProcessExit: (() -> Void)?
 
@@ -62,15 +59,6 @@ class ClaudeSession {
                     shellEnvironment = env
                 }
 
-                // Now find claude: check the shell PATH first, then fallback locations
-                let home = FileManager.default.homeDirectoryForCurrentUser.path
-                let searchPaths = [
-                    "\(home)/.local/bin/claude",
-                    "\(home)/.claude/local/bin/claude",
-                    "/usr/local/bin/claude",
-                    "/opt/homebrew/bin/claude"
-                ]
-
                 // Check if claude is in the captured shell PATH
                 if let shellPath = shellEnvironment?["PATH"] {
                     for dir in shellPath.components(separatedBy: ":") {
@@ -83,36 +71,29 @@ class ClaudeSession {
                     }
                 }
 
-                // Fallback: check common install locations directly
-                for fallback in searchPaths {
-                    if FileManager.default.isExecutableFile(atPath: fallback) {
-                        claudePath = fallback
-                        completion(fallback)
-                        return
-                    }
-                }
-
-                completion(nil)
+                completeWithFallbackPath(completion)
             }
         }
         do { try proc.run() } catch {
             // If shell fails entirely, still try fallback paths
-            let home = FileManager.default.homeDirectoryForCurrentUser.path
-            let fallbacks = [
-                "\(home)/.local/bin/claude",
-                "\(home)/.claude/local/bin/claude",
-                "/usr/local/bin/claude",
-                "/opt/homebrew/bin/claude"
-            ]
-            for fallback in fallbacks {
-                if FileManager.default.isExecutableFile(atPath: fallback) {
-                    claudePath = fallback
-                    completion(fallback)
-                    return
-                }
-            }
-            completion(nil)
+            completeWithFallbackPath(completion)
         }
+    }
+
+    private static let fallbackPaths: [String] = {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return [
+            "\(home)/.local/bin/claude",
+            "\(home)/.claude/local/bin/claude",
+            "/usr/local/bin/claude",
+            "/opt/homebrew/bin/claude"
+        ]
+    }()
+
+    private static func completeWithFallbackPath(_ completion: (String?) -> Void) {
+        let fallback = fallbackPaths.first { FileManager.default.isExecutableFile(atPath: $0) }
+        if let fallback { claudePath = fallback }
+        completion(fallback)
     }
 
     func start() {
@@ -197,8 +178,6 @@ class ClaudeSession {
             try proc.run()
             process = proc
             inputPipe = inPipe
-            outputPipe = outPipe
-            errorPipe = errPipe
             isRunning = true
         } catch {
             let msg = "Failed to launch Claude CLI.\n\nMake sure Claude Code is installed and up to date:\n  curl -fsSL https://claude.ai/install.sh | sh\n\nError: \(error.localizedDescription)"
@@ -250,12 +229,6 @@ class ClaudeSession {
         let type = json["type"] as? String ?? ""
 
         switch type {
-        case "system":
-            let subtype = json["subtype"] as? String ?? ""
-            if subtype == "init" {
-                onSessionReady?()
-            }
-
         case "assistant":
             if let message = json["message"] as? [String: Any],
                let content = message["content"] as? [[String: Any]] {
@@ -266,9 +239,9 @@ class ClaudeSession {
                     } else if blockType == "tool_use" {
                         let toolName = block["name"] as? String ?? "Tool"
                         let input = block["input"] as? [String: Any] ?? [:]
-                        let summary = formatToolSummary(toolName: toolName, input: input)
+                        let summary = formatToolSummary(input)
                         history.append(Message(role: .toolUse, text: "\(toolName): \(summary)"))
-                        onToolUse?(toolName, input)
+                        onToolUse?(toolName, summary)
                     }
                 }
             }
@@ -314,21 +287,10 @@ class ClaudeSession {
         }
     }
 
-    private func formatToolSummary(toolName: String, input: [String: Any]) -> String {
-        switch toolName {
-        case "Bash":
-            return input["command"] as? String ?? ""
-        case "Read":
-            return input["file_path"] as? String ?? ""
-        case "Edit", "Write":
-            return input["file_path"] as? String ?? ""
-        case "Glob":
-            return input["pattern"] as? String ?? ""
-        case "Grep":
-            return input["pattern"] as? String ?? ""
-        default:
-            if let desc = input["description"] as? String { return desc }
-            return input.keys.sorted().prefix(3).joined(separator: ", ")
+    private func formatToolSummary(_ input: [String: Any]) -> String {
+        for key in ["command", "file_path", "pattern", "description"] {
+            if let value = input[key] as? String { return value }
         }
+        return input.keys.sorted().prefix(3).joined(separator: ", ")
     }
 }

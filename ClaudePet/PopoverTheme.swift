@@ -21,7 +21,6 @@ struct PopoverTheme {
     let errorColor: NSColor
     let successColor: NSColor
     let inputBg: NSColor
-    let inputCornerRadius: CGFloat
     // Bubble
     let bubbleBg: NSColor
     let bubbleBorder: NSColor
@@ -52,7 +51,6 @@ struct PopoverTheme {
         errorColor: NSColor(red: 1.0, green: 0.3, blue: 0.2, alpha: 1.0),
         successColor: NSColor(red: 0.4, green: 0.65, blue: 0.4, alpha: 1.0),
         inputBg: NSColor(red: 0.12, green: 0.12, blue: 0.12, alpha: 1.0),
-        inputCornerRadius: 4,
         bubbleBg: NSColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 0.92),
         bubbleBorder: NSColor(red: 1.0, green: 0.4, blue: 0.0, alpha: 0.6),
         bubbleText: NSColor(white: 0.7, alpha: 1.0),
@@ -81,7 +79,6 @@ struct PopoverTheme {
         errorColor: NSColor(red: 0.9, green: 0.3, blue: 0.2, alpha: 1.0),
         successColor: NSColor(red: 0.3, green: 0.72, blue: 0.5, alpha: 1.0),
         inputBg: NSColor(red: 1.0, green: 0.98, blue: 0.95, alpha: 1.0),
-        inputCornerRadius: 14,
         bubbleBg: NSColor(red: 1.0, green: 0.95, blue: 0.90, alpha: 0.95),
         bubbleBorder: NSColor(red: 0.95, green: 0.55, blue: 0.65, alpha: 0.6),
         bubbleText: NSColor(red: 0.55, green: 0.5, blue: 0.52, alpha: 1.0),
@@ -110,7 +107,6 @@ struct PopoverTheme {
         errorColor: NSColor(red: 0.85, green: 0.2, blue: 0.15, alpha: 1.0),
         successColor: NSColor(red: 0.2, green: 0.65, blue: 0.3, alpha: 1.0),
         inputBg: NSColor.white,
-        inputCornerRadius: 8,
         bubbleBg: NSColor(red: 0.94, green: 0.95, blue: 0.97, alpha: 0.95),
         bubbleBorder: NSColor(red: 0.0, green: 0.47, blue: 0.84, alpha: 0.4),
         bubbleText: NSColor(red: 0.45, green: 0.47, blue: 0.52, alpha: 1.0),
@@ -139,7 +135,6 @@ struct PopoverTheme {
         errorColor: NSColor(red: 0.6, green: 0.15, blue: 0.1, alpha: 1.0),
         successColor: NSColor(red: 0.15, green: 0.4, blue: 0.15, alpha: 1.0),
         inputBg: NSColor(red: 0.88, green: 0.90, blue: 0.84, alpha: 1.0),
-        inputCornerRadius: 3,
         bubbleBg: NSColor(red: 0.82, green: 0.84, blue: 0.78, alpha: 0.95),
         bubbleBorder: NSColor(red: 0.55, green: 0.58, blue: 0.50, alpha: 0.7),
         bubbleText: NSColor(red: 0.4, green: 0.42, blue: 0.38, alpha: 1.0),
@@ -172,7 +167,7 @@ struct PopoverTheme {
             textPrimary: textPrimary, textDim: textDim,
             accentColor: color,
             errorColor: errorColor, successColor: successColor,
-            inputBg: inputBg, inputCornerRadius: inputCornerRadius,
+            inputBg: inputBg,
             bubbleBg: NSColor(red: min(r * 0.15 + 0.85, 1), green: min(g * 0.15 + 0.85, 1), blue: min(b * 0.15 + 0.85, 1), alpha: 0.95),
             bubbleBorder: border,
             bubbleText: bubbleText,
@@ -196,7 +191,7 @@ struct PopoverTheme {
             font: baseFont, fontBold: boldFont,
             textPrimary: textPrimary, textDim: textDim, accentColor: accentColor,
             errorColor: errorColor, successColor: successColor,
-            inputBg: inputBg, inputCornerRadius: inputCornerRadius,
+            inputBg: inputBg,
             bubbleBg: bubbleBg, bubbleBorder: bubbleBorder, bubbleText: bubbleText,
             bubbleCompletionBorder: bubbleCompletionBorder, bubbleCompletionText: bubbleCompletionText,
             bubbleFont: smallFont, bubbleCornerRadius: bubbleCornerRadius

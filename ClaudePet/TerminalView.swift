@@ -2,8 +2,6 @@ import AppKit
 
 class PaddedTextFieldCell: NSTextFieldCell {
     private let inset = NSSize(width: 8, height: 2)
-    var fieldBackgroundColor: NSColor?
-    var fieldCornerRadius: CGFloat = 4
 
     override var focusRingType: NSFocusRingType {
         get { .none }
@@ -11,11 +9,6 @@ class PaddedTextFieldCell: NSTextFieldCell {
     }
 
     override func draw(withFrame cellFrame: NSRect, in controlView: NSView) {
-        if let bg = fieldBackgroundColor {
-            let path = NSBezierPath(roundedRect: cellFrame, xRadius: fieldCornerRadius, yRadius: fieldCornerRadius)
-            bg.setFill()
-            path.fill()
-        }
         drawInterior(withFrame: cellFrame, in: controlView)
     }
 
@@ -54,7 +47,6 @@ class TerminalView: NSView {
     var onSendMessage: ((String) -> Void)?
 
     private var currentAssistantText = ""
-    private var isStreaming = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -67,9 +59,8 @@ class TerminalView: NSView {
     }
 
     var characterColor: NSColor?
-    var themeOverride: PopoverTheme?
     var theme: PopoverTheme {
-        var t = themeOverride ?? PopoverTheme.current
+        var t = PopoverTheme.current
         if let color = characterColor { t = t.withCharacterColor(color) }
         t = t.withCustomFont()
         return t
@@ -132,8 +123,6 @@ class TerminalView: NSView {
         paddedCell.textColor = t.textPrimary
         paddedCell.drawsBackground = false
         paddedCell.isBezeled = false
-        paddedCell.fieldBackgroundColor = nil
-        paddedCell.fieldCornerRadius = 0
         paddedCell.placeholderAttributedString = NSAttributedString(
             string: "Ask Claude...",
             attributes: [.font: t.font, .foregroundColor: t.textDim]
@@ -152,7 +141,6 @@ class TerminalView: NSView {
         inputField.stringValue = ""
 
         appendUser(text)
-        isStreaming = true
         currentAssistantText = ""
         onSendMessage?(text)
     }
@@ -200,12 +188,6 @@ class TerminalView: NSView {
         }
     }
 
-    func endStreaming() {
-        if isStreaming {
-            isStreaming = false
-        }
-    }
-
     func appendError(_ text: String) {
         let t = theme
         textView.textStorage?.append(NSAttributedString(string: text + "\n", attributes: [
@@ -216,7 +198,6 @@ class TerminalView: NSView {
 
     func appendToolUse(toolName: String, summary: String) {
         let t = theme
-        endStreaming()
         let block = NSMutableAttributedString()
         block.append(NSAttributedString(string: "  \(toolName.uppercased()) ", attributes: [
             .font: t.fontBold, .foregroundColor: t.accentColor
@@ -236,7 +217,7 @@ class TerminalView: NSView {
         block.append(NSAttributedString(string: prefix, attributes: [
             .font: t.fontBold, .foregroundColor: color
         ]))
-        block.append(NSAttributedString(string: "\(summary.isEmpty ? "" : summary)\n", attributes: [
+        block.append(NSAttributedString(string: "\(summary)\n", attributes: [
             .font: t.font, .foregroundColor: t.textDim
         ]))
         textView.textStorage?.append(block)
@@ -279,7 +260,6 @@ class TerminalView: NSView {
         let result = NSMutableAttributedString()
         let lines = text.components(separatedBy: "\n")
         var inCodeBlock = false
-        var codeBlockLang = ""
         var codeLines: [String] = []
 
         for (i, line) in lines.enumerated() {
@@ -296,7 +276,6 @@ class TerminalView: NSView {
                     codeLines = []
                 } else {
                     inCodeBlock = true
-                    codeBlockLang = String(line.dropFirst(3))
                 }
                 continue
             }

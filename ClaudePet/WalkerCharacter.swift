@@ -22,22 +22,15 @@ class PopoverDragTitleBarView: NSView {
 }
 
 class WalkerCharacter {
-    let videoName: String
     var window: NSWindow!
     var spriteLayer: CALayer!
-    // spriteImages layout:
-    // - if idleAlt exists: [idleMain, idleAlt, walk1, walk2]
-    // - else:            [idleMain, walk1, walk2]
+    // [idle, walk1, walk2]
     private var spriteImages: [CGImage] = []
     private let spriteIdleName: String
-    private let spriteIdleAltName: String?
     private let spriteWalk1Name: String
     private let spriteWalk2Name: String
     private var walkFrameTimer: Timer?
-    private var idleAltTimer: Timer?
-    private let walkFrameInterval: TimeInterval = 0.3
-    private let idleAltInterval: TimeInterval = 0.48
-    private var idleAltPhase: Bool = false
+    private var walkFrameInterval: TimeInterval = 0.3
     private var walkAnimStep: Int = 0
 
     var videoWidth: CGFloat = 64
@@ -51,13 +44,9 @@ class WalkerCharacter {
     var fullSpeedStart: CFTimeInterval = 3.75
     var decelStart: CFTimeInterval = 7.5
     var walkStop: CFTimeInterval = 8.25
-    var walkAmountRange: ClosedRange<CGFloat> = 0.25...0.5
-    var yOffset: CGFloat = 0
-    var flipXOffset: CGFloat = 0
     var characterColor: NSColor = .gray
 
     // Walk state - now 2D across entire screen
-    var playCount = 0
     var walkStartTime: CFTimeInterval = 0
     var positionX: CGFloat = 0.5
     var positionY: CGFloat = 0.1
@@ -69,12 +58,18 @@ class WalkerCharacter {
     var walkEndX: CGFloat = 0.0
     var walkStartY: CGFloat = 0.0
     var walkEndY: CGFloat = 0.0
-    var currentTravelDistance: CGFloat = 500.0
-    var walkStartPixel: CGFloat = 0.0
-    var walkEndPixel: CGFloat = 0.0
-    
-    // Free roam mode - walks anywhere on screen
-    var freeRoamMode = true
+
+    // 0 = calm stroller, 1 = full Stitch chaos
+    var naughtiness: Double = 0.5
+    private enum Antic { case stroll, zoomies, sneak, hop, wiggle, chase, flee }
+    private var antic: Antic = .stroll
+    private var walkDuration: CFTimeInterval = 10.0
+    private var hopCount = 0
+    private var hopHeight: CGFloat = 0
+    private var wiggleFlips = 0
+    private var cursorWasNear = false
+    private var fleeCooldownEnd: CFTimeInterval = 0
+    private var bubbleIsMischief = false
 
     // Onboarding
     var isOnboarding = false
@@ -84,7 +79,6 @@ class WalkerCharacter {
     
     // Hover interaction state
     var isHovered = false
-    var lastHoverTime: CFTimeInterval = 0
     var lastHoverSoundTime: CFTimeInterval = 0
     var hoverReactionShown = false
     private static let hoverPhrases = [
@@ -100,31 +94,20 @@ class WalkerCharacter {
     var claudeSession: ClaudeSession?
     var clickOutsideMonitor: Any?
     var escapeKeyMonitor: Any?
-    var currentStreamingText = ""
     weak var controller: ClaudePetController?
-    var themeOverride: PopoverTheme?
     var isClaudeBusy: Bool { claudeSession?.isBusy ?? false }
     var thinkingBubbleWindow: NSWindow?
     var popoverPinnedOrigin: NSPoint?
 
     init(
-        videoName: String,
         spriteIdleName: String,
         spriteWalk1Name: String,
-        spriteWalk2Name: String,
-        spriteIdleAltName: String? = nil
+        spriteWalk2Name: String
     ) {
-        self.videoName = videoName
         self.spriteIdleName = spriteIdleName
-        self.spriteIdleAltName = spriteIdleAltName
         self.spriteWalk1Name = spriteWalk1Name
         self.spriteWalk2Name = spriteWalk2Name
     }
-
-    private var hasIdleAlt: Bool { spriteImages.count == 4 }
-    private var walk1Index: Int { hasIdleAlt ? 2 : 1 }
-    private var walk2Index: Int { hasIdleAlt ? 3 : 2 }
-    private var idleAltIndex: Int? { hasIdleAlt ? 1 : nil }
 
     /// `NSImage.cgImage(forProposedRect:...)` often returns an opaque bitmap (alpha lost). Catalog PNGs need this path.
     private static func cgImagePreservingAlpha(named resourceName: String) -> CGImage? {
@@ -171,31 +154,27 @@ class WalkerCharacter {
         let idleImg = Self.cgImagePreservingAlpha(named: spriteIdleName)
         let w1 = Self.cgImagePreservingAlpha(named: spriteWalk1Name)
         let w2 = Self.cgImagePreservingAlpha(named: spriteWalk2Name)
-        let idleAltImg: CGImage?
-        if let altName = spriteIdleAltName {
-            idleAltImg = Self.cgImagePreservingAlpha(named: altName)
-        } else {
-            idleAltImg = nil
-        }
 
         guard let idleImg, let w1, let w2 else {
             print("Sprite images not found for set: idle=\(spriteIdleName), walk1=\(spriteWalk1Name), walk2=\(spriteWalk2Name)")
             return
         }
 
-        spriteImages = idleAltImg != nil ? [idleImg, idleAltImg!, w1, w2] : [idleImg, w1, w2]
+        spriteImages = [idleImg, w1, w2]
 
         spriteLayer = CALayer()
         spriteLayer.contents = idleImg
         spriteLayer.contentsGravity = .resizeAspect
         spriteLayer.isOpaque = false
         spriteLayer.backgroundColor = NSColor.clear.cgColor
+        // No implicit crossfade between frames; it ghosts the legs.
+        spriteLayer.actions = ["contents": NSNull()]
         spriteLayer.frame = CGRect(x: 0, y: 0, width: displayWidth, height: displayHeight)
 
         let screen = NSScreen.main!
         let dockTopY = screen.visibleFrame.origin.y
         let bottomPadding = displayHeight * 0.15
-        let y = dockTopY - bottomPadding + yOffset
+        let y = dockTopY - bottomPadding
 
         let contentRect = CGRect(x: 0, y: y, width: displayWidth, height: displayHeight)
         window = NSWindow(
@@ -227,44 +206,18 @@ class WalkerCharacter {
         walkFrameTimer = nil
     }
 
-    private func invalidateIdleAltTimer() {
-        idleAltTimer?.invalidate()
-        idleAltTimer = nil
-    }
-
     private func showIdleSprite() {
         invalidateWalkTimer()
-        invalidateIdleAltTimer()
         walkAnimStep = 0
-        idleAltPhase = false
         if !spriteImages.isEmpty {
             spriteLayer?.contents = spriteImages[0]
-        }
-
-        // Optional: subtle idle arm bob (used by claude).
-        guard let altIdx = idleAltIndex else { return }
-        guard window.isVisible else { return }
-        // We only bob while paused (not walking).
-        guard isPaused && !isWalking else { return }
-
-        idleAltTimer = Timer.scheduledTimer(withTimeInterval: idleAltInterval, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            guard self.isPaused && !self.isWalking else { return }
-            guard self.window.isVisible else { return }
-            guard self.spriteImages.count > altIdx else { return }
-            self.idleAltPhase.toggle()
-            self.spriteLayer?.contents = self.idleAltPhase ? self.spriteImages[altIdx] : self.spriteImages[0]
-        }
-        if let t = idleAltTimer {
-            RunLoop.main.add(t, forMode: .common)
         }
     }
 
     private func startWalkSpriteTimer() {
         invalidateWalkTimer()
-        invalidateIdleAltTimer()
         guard spriteImages.count >= 3 else { return }
-        walkAnimStep = walk1Index
+        walkAnimStep = 1
         spriteLayer?.contents = spriteImages[walkAnimStep]
         walkFrameTimer = Timer.scheduledTimer(withTimeInterval: walkFrameInterval, repeats: true) { [weak self] _ in
             self?.advanceWalkSpriteFrame()
@@ -278,7 +231,7 @@ class WalkerCharacter {
         guard spriteImages.count >= 3 else { return }
         let pinnedVisual = isPinnedByUser
         guard isWalking || pinnedVisual else { return }
-        walkAnimStep = (walkAnimStep == walk1Index) ? walk2Index : walk1Index
+        walkAnimStep = (walkAnimStep == 1) ? 2 : 1
         spriteLayer?.contents = spriteImages[walkAnimStep]
     }
 
@@ -334,7 +287,6 @@ class WalkerCharacter {
         click outside to dismiss, then click me again to start chatting!
         """
         terminalView?.appendStreamingText(welcome)
-        terminalView?.endStreaming()
 
         updatePopoverPosition()
         popoverWindow?.orderFrontRegardless()
@@ -372,6 +324,9 @@ class WalkerCharacter {
         }
 
         isIdleForPopover = true
+        isWalking = false
+        isPaused = true
+        showIdleSprite()
 
         // Always clear any bubble (thinking or completion) when popover opens
         showingCompletion = false
@@ -459,7 +414,7 @@ class WalkerCharacter {
     }
 
     var resolvedTheme: PopoverTheme {
-        (themeOverride ?? PopoverTheme.current).withCharacterColor(characterColor).withCustomFont()
+        PopoverTheme.current.withCharacterColor(characterColor).withCustomFont()
     }
 
     func createPopoverWindow() {
@@ -524,7 +479,6 @@ class WalkerCharacter {
 
         let terminal = TerminalView(frame: NSRect(x: 0, y: 0, width: popoverWidth, height: popoverHeight - 29))
         terminal.characterColor = characterColor
-        terminal.themeOverride = themeOverride
         terminal.autoresizingMask = [.width, .height]
         terminal.onSendMessage = { [weak self] message in
             self?.claudeSession?.send(message: message)
@@ -538,12 +492,10 @@ class WalkerCharacter {
 
     private func wireSession(_ session: ClaudeSession) {
         session.onText = { [weak self] text in
-            self?.currentStreamingText += text
             self?.terminalView?.appendStreamingText(text)
         }
 
         session.onTurnComplete = { [weak self] in
-            self?.terminalView?.endStreaming()
             self?.playCompletionSound()
             self?.showCompletionBubble()
         }
@@ -552,10 +504,8 @@ class WalkerCharacter {
             self?.terminalView?.appendError(text)
         }
 
-        session.onToolUse = { [weak self] toolName, input in
-            guard let self = self else { return }
-            let summary = self.formatToolInput(input)
-            self.terminalView?.appendToolUse(toolName: toolName, summary: summary)
+        session.onToolUse = { [weak self] toolName, summary in
+            self?.terminalView?.appendToolUse(toolName: toolName, summary: summary)
         }
 
         session.onToolResult = { [weak self] summary, isError in
@@ -563,21 +513,13 @@ class WalkerCharacter {
         }
 
         session.onProcessExit = { [weak self] in
-            self?.terminalView?.endStreaming()
             self?.terminalView?.appendError("Claude session ended.")
         }
     }
 
-    private func formatToolInput(_ input: [String: Any]) -> String {
-        if let cmd = input["command"] as? String { return cmd }
-        if let path = input["file_path"] as? String { return path }
-        if let pattern = input["pattern"] as? String { return pattern }
-        return input.keys.sorted().prefix(3).joined(separator: ", ")
-    }
-
     func updatePopoverPosition() {
         guard let popover = popoverWindow, isIdleForPopover else { return }
-        guard let screen = NSScreen.main else { return }
+        guard let screen = activeScreen else { return }
 
         if let pinned = popoverPinnedOrigin {
             popover.setFrameOrigin(pinned)
@@ -737,6 +679,7 @@ class WalkerCharacter {
     func showCompletionBubble() {
         currentPhrase = Self.completionPhrases.randomElement() ?? "done!"
         showingCompletion = true
+        bubbleIsMischief = false
         completionBubbleExpiry = CACurrentMediaTime() + 3.0
         lastPhraseUpdate = 0
         phraseAnimating = false
@@ -818,7 +761,6 @@ class WalkerCharacter {
         guard !isIdleForPopover && !isOnboarding else { return }
         let now = CACurrentMediaTime()
         isHovered = true
-        lastHoverTime = now
 
         // Play one of the pet sounds on hover with cooldown.
         if now - lastHoverSoundTime > 1.2 {
@@ -850,78 +792,141 @@ class WalkerCharacter {
     
     // MARK: - Walking
 
-    func startWalk() {
+    private func startWalk(_ forced: Antic? = nil) {
+        antic = forced ?? pickAntic()
         isPaused = false
         isWalking = true
-        playCount = 0
         walkStartTime = CACurrentMediaTime()
-        
-        guard let screen = NSScreen.main else { return }
-        let screenFrame = screen.frame
-        
-        if freeRoamMode {
-            // Pick random direction
-            if positionX > 0.85 {
-                goingRight = false
-            } else if positionX < 0.15 {
-                goingRight = true
-            } else {
-                goingRight = Bool.random()
-            }
-            
-            walkStartX = positionX
-            walkStartY = positionY
-            
-            // Random walk distance (10-40% of screen)
-            let walkDistX = CGFloat.random(in: 0.1...0.4)
-            if goingRight {
-                walkEndX = min(walkStartX + walkDistX, 0.95)
-            } else {
-                walkEndX = max(walkStartX - walkDistX, 0.05)
-            }
-            
-            // Sometimes change Y position too (naughty roaming!)
-            if Bool.random() {
-                let yChange = CGFloat.random(in: -0.15...0.15)
-                walkEndY = min(max(walkStartY + yChange, 0.05), 0.7)
-            } else {
-                walkEndY = walkStartY
-            }
-        } else {
-            // Original dock-constrained behavior
-            if positionX > 0.85 {
-                goingRight = false
-            } else if positionX < 0.15 {
-                goingRight = true
-            } else {
-                goingRight = Bool.random()
-            }
+        walkStartX = positionX
+        walkStartY = positionY
+        walkFrameInterval = 0.3
+        hopCount = 0
+        hopHeight = 0
+        wiggleFlips = 0
 
-            walkStartX = positionX
-            let referenceWidth: CGFloat = 500.0
-            let walkPixels = CGFloat.random(in: walkAmountRange) * referenceWidth
-            let walkAmount = currentTravelDistance > 0 ? walkPixels / currentTravelDistance : 0.3
-            if goingRight {
-                walkEndX = min(walkStartX + walkAmount, 1.0)
-            } else {
-                walkEndX = max(walkStartX - walkAmount, 0.0)
-            }
+        switch antic {
+        case .stroll:
+            walkDuration = videoDuration
+            pickTarget(distance: 0.1...0.4, yChance: 0.5, yRange: 0.15)
+        case .zoomies:
+            walkDuration = .random(in: 1.6...2.4)
+            walkFrameInterval = 0.09
+            hopCount = 3
+            hopHeight = 10
+            pickTarget(distance: 0.35...0.6, yChance: 0.7, yRange: 0.25)
+            blurt(["wheee!", "zoom zoom!", "nyoom!", "can't stop!", "hehehe!"])
+        case .sneak:
+            walkDuration = .random(in: 6.0...9.0)
+            walkFrameInterval = 0.55
+            pickTarget(distance: 0.08...0.2, yChance: 0.3, yRange: 0.08)
+            blurt(["shhh...", "*sneaks*", "tiptoe...", "nobody saw that"])
+        case .hop:
+            walkDuration = .random(in: 1.6...2.6)
+            hopCount = Int.random(in: 2...4)
+            hopHeight = .random(in: 18...30)
+            pickTarget(distance: 0.0...0.08, yChance: 0, yRange: 0)
+            blurt(["boing!", "hup hup!", "ih!", "*bounces*"])
+        case .wiggle:
+            walkDuration = .random(in: 1.2...2.0)
+            walkFrameInterval = 0.12
+            walkEndX = walkStartX
             walkEndY = walkStartY
+            blurt(["hehehe", "meega nala kweesta!", "*mischief*", "naga!", "ih ih ih!"])
+        case .chase:
+            let target = cursorTarget() ?? CGPoint(x: walkStartX, y: walkStartY)
+            walkEndX = target.x
+            walkEndY = target.y
+            goingRight = walkEndX >= walkStartX
+            walkDuration = max(1.5, Double(hypot(walkEndX - walkStartX, walkEndY - walkStartY)) * 6)
+            walkFrameInterval = 0.15
+            blurt(["gaba!", "gonna get you!", "*chases*"], for: 1.2)
+        case .flee:
+            let cursor = NSEvent.mouseLocation
+            goingRight = cursor.x < window.frame.midX
+            if (goingRight && walkStartX > 0.8) || (!goingRight && walkStartX < 0.2) { goingRight.toggle() }
+            walkDuration = .random(in: 1.2...1.8)
+            walkFrameInterval = 0.08
+            hopCount = 2
+            hopHeight = 8
+            let dx = CGFloat.random(in: 0.2...0.35)
+            walkEndX = goingRight ? min(walkStartX + dx, 0.95) : max(walkStartX - dx, 0.05)
+            let dy = CGFloat.random(in: 0.05...0.15) * (cursor.y < window.frame.midY ? 1 : -1)
+            walkEndY = min(max(walkStartY + dy, 0.05), 0.7)
+            blurt(["nope!", "can't catch me!", "hehehe!", "nyeh!", "ha!"])
         }
-        
-        walkStartPixel = walkStartX * screenFrame.width
-        walkEndPixel = walkEndX * screenFrame.width
 
         updateFlip()
         startWalkSpriteTimer()
+    }
+
+    private func pickAntic() -> Antic {
+        let n = naughtiness
+        var options: [(Antic, Double)] = [
+            (.stroll, 1 + 3 * (1 - n)),
+            (.zoomies, 2 * n),
+            (.sneak, 0.3 + n),
+            (.hop, 0.5 + 1.5 * n),
+            (.wiggle, 1.5 * n)
+        ]
+        if cursorTarget() != nil { options.append((.chase, n)) }
+        var roll = Double.random(in: 0..<options.reduce(0) { $0 + $1.1 })
+        for (option, weight) in options {
+            if roll < weight { return option }
+            roll -= weight
+        }
+        return .stroll
+    }
+
+    private func pickTarget(distance: ClosedRange<CGFloat>, yChance: Double, yRange: CGFloat) {
+        if positionX > 0.85 {
+            goingRight = false
+        } else if positionX < 0.15 {
+            goingRight = true
+        } else {
+            goingRight = Bool.random()
+        }
+        let dx = CGFloat.random(in: distance)
+        walkEndX = goingRight ? min(walkStartX + dx, 0.95) : max(walkStartX - dx, 0.05)
+        if Double.random(in: 0..<1) < yChance {
+            walkEndY = min(max(walkStartY + .random(in: -yRange...yRange), 0.05), 0.7)
+        } else {
+            walkEndY = walkStartY
+        }
+    }
+
+    // Normalized position that puts the pet under the cursor, if the cursor is on the pet's screen.
+    private func cursorTarget() -> CGPoint? {
+        guard let frame = activeScreen?.frame else { return nil }
+        let cursor = NSEvent.mouseLocation
+        guard frame.contains(cursor) else { return nil }
+        let x = (cursor.x - displayWidth / 2 - frame.minX) / max(frame.width - displayWidth, 1)
+        let y = (cursor.y - displayHeight / 2 - frame.minY) / frame.height
+        return CGPoint(x: min(max(x, 0.05), 0.95), y: min(max(y, 0.05), 0.7))
+    }
+
+    private func cursorJustCameNear() -> Bool {
+        let cursor = NSEvent.mouseLocation
+        let near = hypot(cursor.x - window.frame.midX, cursor.y - window.frame.midY) < 170
+        defer { cursorWasNear = near }
+        return near && !cursorWasNear
+    }
+
+    private func blurt(_ phrases: [String], for duration: CFTimeInterval = 1.8) {
+        // Never cover Claude's thinking/done bubbles or the onboarding greeting.
+        guard !isClaudeBusy, !isOnboarding, !showingCompletion || bubbleIsMischief else { return }
+        currentPhrase = phrases.randomElement() ?? ""
+        showingCompletion = true
+        bubbleIsMischief = true
+        completionBubbleExpiry = CACurrentMediaTime() + duration
+        showBubble(text: currentPhrase, isCompletion: true)
     }
 
     func enterPause() {
         isWalking = false
         isPaused = true
         showIdleSprite()
-        // Shorter pauses - more active/naughty behavior
-        let delay = Double.random(in: 1.5...4.0)
+        // Naughtier pets sit still for less time.
+        let delay = Double.random(in: 1.5...4.0) * (1 - 0.4 * naughtiness)
         pauseEndTime = CACurrentMediaTime() + delay
     }
 
@@ -935,10 +940,6 @@ class WalkerCharacter {
         }
         spriteLayer.frame = CGRect(x: 0, y: 0, width: displayWidth, height: displayHeight)
         CATransaction.commit()
-    }
-
-    var currentFlipCompensation: CGFloat {
-        goingRight ? 0 : flipXOffset
     }
 
     func movementPosition(at videoTime: CFTimeInterval) -> CGFloat {
@@ -968,88 +969,87 @@ class WalkerCharacter {
 
     // MARK: - Frame Update
 
-    func update(dockX: CGFloat, dockWidth: CGFloat, dockTopY: CGFloat) {
-        guard let screen = NSScreen.main else { return }
+    private var activeScreen: NSScreen? { controller?.activeScreen ?? NSScreen.main }
+
+    func update() {
+        guard let screen = activeScreen else { return }
         let screenFrame = screen.frame
-        
-        currentTravelDistance = max(dockWidth - displayWidth, 0)
-        
+
         // If user dragged character to custom position, keep animation playing at that spot
         if isPinnedByUser {
-            resumeSpriteMotionIfPinned()
+            if !isIdleForPopover { resumeSpriteMotionIfPinned() }
             updatePopoverPosition()
             updateThinkingBubble()
             return
         }
-        
+
+        let cursorArrived = cursorJustCameNear()
+
+        // Sit still while the chat box is open.
         if isIdleForPopover {
-            let x: CGFloat
-            let y: CGFloat
-            if freeRoamMode {
-                x = screenFrame.minX + (screenFrame.width - displayWidth) * positionX
-                y = screenFrame.minY + screenFrame.height * positionY
-            } else {
-                x = dockX + currentTravelDistance * positionX + currentFlipCompensation
-                y = dockTopY - displayHeight * 0.15 + yOffset
-            }
-            window.setFrameOrigin(NSPoint(x: x, y: y))
+            placeWindow(in: screenFrame)
             updatePopoverPosition()
             updateThinkingBubble()
+            return
         }
 
         let now = CACurrentMediaTime()
+
+        if cursorArrived, !isOnboarding, now >= fleeCooldownEnd,
+           !isWalking || antic == .stroll || antic == .sneak,
+           Double.random(in: 0..<1) < 0.45 * naughtiness {
+            fleeCooldownEnd = now + 12
+            startWalk(.flee)
+        }
 
         if isPaused {
             if now >= pauseEndTime {
                 startWalk()
             } else {
-                let x: CGFloat
-                let y: CGFloat
-                if freeRoamMode {
-                    x = screenFrame.minX + (screenFrame.width - displayWidth) * positionX
-                    y = screenFrame.minY + screenFrame.height * positionY
-                } else {
-                    x = dockX + currentTravelDistance * positionX + currentFlipCompensation
-                    y = dockTopY - displayHeight * 0.15 + yOffset
-                }
-                window.setFrameOrigin(NSPoint(x: x, y: y))
-                if isIdleForPopover { updatePopoverPosition() }
+                placeWindow(in: screenFrame)
                 return
             }
         }
 
         if isWalking {
             let elapsed = now - walkStartTime
-            let videoTime = min(elapsed, videoDuration)
+            // Stretch the stroll's ease-in/out curve over this antic's duration.
+            let curveTime = min(elapsed, walkDuration) * videoDuration / walkDuration
 
-            let walkNorm = elapsed >= videoDuration ? 1.0 : movementPosition(at: videoTime)
+            let walkNorm = elapsed >= walkDuration ? 1.0 : movementPosition(at: curveTime)
             
             // Interpolate X position
             positionX = walkStartX + (walkEndX - walkStartX) * CGFloat(walkNorm)
             
-            // Interpolate Y position (for free roam diagonal walks)
-            if freeRoamMode {
-                positionY = walkStartY + (walkEndY - walkStartY) * CGFloat(walkNorm)
+            // Interpolate Y position (diagonal walks)
+            positionY = walkStartY + (walkEndY - walkStartY) * CGFloat(walkNorm)
+
+            if antic == .wiggle, Int(elapsed / 0.18) != wiggleFlips {
+                wiggleFlips = Int(elapsed / 0.18)
+                goingRight.toggle()
+                updateFlip()
             }
 
-            if elapsed >= videoDuration {
+            if elapsed >= walkDuration {
+                if antic == .chase {
+                    blurt(["boop!", "gotcha!", "tag, you're it!"])
+                    playCompletionSound()
+                }
                 enterPause()
-                if isIdleForPopover { updatePopoverPosition() }
                 return
             }
 
-            let x: CGFloat
-            let y: CGFloat
-            if freeRoamMode {
-                x = screenFrame.minX + (screenFrame.width - displayWidth) * positionX
-                y = screenFrame.minY + screenFrame.height * positionY
-            } else {
-                x = dockX + currentTravelDistance * positionX + currentFlipCompensation
-                y = dockTopY - displayHeight * 0.15 + yOffset
-            }
-            window.setFrameOrigin(NSPoint(x: x, y: y))
+            let progress = elapsed / walkDuration
+            let lift = hopHeight * CGFloat(abs(sin(Double.pi * Double(hopCount) * progress)))
+            placeWindow(in: screenFrame, lift: lift)
         }
 
         updateThinkingBubble()
+    }
+
+    private func placeWindow(in screenFrame: CGRect, lift: CGFloat = 0) {
+        let x = screenFrame.minX + (screenFrame.width - displayWidth) * positionX
+        let y = screenFrame.minY + screenFrame.height * positionY + lift
+        window.setFrameOrigin(NSPoint(x: x, y: y))
     }
 }

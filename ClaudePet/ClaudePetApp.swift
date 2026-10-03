@@ -75,7 +75,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Display submenu
         let displayItem = NSMenuItem(title: "Display", action: nil, keyEquivalent: "")
         let displayMenu = NSMenu()
-        displayMenu.delegate = self
         let autoItem = NSMenuItem(title: "Auto (Main Display)", action: #selector(switchDisplay(_:)), keyEquivalent: "")
         autoItem.tag = -1
         autoItem.state = .on
@@ -157,17 +156,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let newVisible = !char.window.isVisible
         controller?.setCharacterVisible(index: idx, visible: newVisible)
         sender.state = newVisible ? .on : .off
-    }
-
-    @objc func toggleDebug(_ sender: NSMenuItem) {
-        guard let debugWin = controller?.debugWindow else { return }
-        if debugWin.isVisible {
-            debugWin.orderOut(nil)
-            sender.state = .off
-        } else {
-            debugWin.orderFrontRegardless()
-            sender.state = .on
-        }
     }
 
     @objc func toggleSounds(_ sender: NSMenuItem) {
