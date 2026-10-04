@@ -11,6 +11,7 @@ class ClaudeSession {
     private var process: Process?
     private var inputPipe: Pipe?
     private var lineBuffer = ""
+    private var outputGeneration = 0  // bumps on every launch/terminate; older output is dropped
     private(set) var isRunning = false
     private(set) var isBusy = false  // true between send() and result
     private(set) var status: Status = .idle
@@ -19,6 +20,20 @@ class ClaudeSession {
     private var pendingMessages: [String] = []
     private static var claudePath: String?
     private static var shellEnvironment: [String: String]?
+
+    // Conversation continuity: a restarted process picks up the same chat via --resume.
+    private(set) var sessionId: String?
+    private var resumedSessionId: String?        // id this process was launched with
+    private var sawInit = false                   // the CLI announced itself (resume accepted)
+    private var messagesToProcess: [String] = []  // re-sent if the resume is rejected
+    private var replyText = ""                    // streamed text of the current answer
+
+    // Read at launch; change them with applySettings(newConversation:).
+    var workingDirectory = FileManager.default.homeDirectoryForCurrentUser
+    var allowsEdits = true
+
+    /// Points at a specific claude binary (custom installs, tests). Ignored unless it's executable.
+    static let claudePathOverrideVariable = "CLAUDE_PET_CLAUDE_PATH"
 
     var onText: ((String) -> Void)?
     var onError: ((String) -> Void)?
@@ -45,10 +60,17 @@ class ClaudeSession {
     """
     private static let noConnectionNotice = "**Can't reach Claude right now.** Check your internet connection, then send your message again."
     private static let stoppedNotice = "**Claude stopped.** Send a message to start it again."
+    private static let stoppedByUserNotice = "**Stopped.** Send a message to keep going."
+    private static let freshStartNotice = "Couldn't pick up the earlier chat, so this is a fresh one."
 
     // MARK: - Finding Claude
 
     static func resolveClaudePath(completion: @escaping (String?) -> Void) {
+        if let override = ProcessInfo.processInfo.environment[claudePathOverrideVariable],
+           FileManager.default.isExecutableFile(atPath: override) {
+            completion(override)
+            return
+        }
         if let cached = claudePath, shellEnvironment != nil,
            FileManager.default.isExecutableFile(atPath: cached) {
             completion(cached)
@@ -212,14 +234,30 @@ class ClaudeSession {
     private func launchProcess(claudePath: String) {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: claudePath)
-        proc.arguments = [
+        var arguments = [
             "-p",
             "--output-format", "stream-json",
             "--input-format", "stream-json",
-            "--verbose",
-            "--dangerously-skip-permissions"
+            "--verbose"
         ]
-        proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        // Without this flag Claude can still read and answer, but won't edit files or run commands.
+        if allowsEdits { arguments.append("--dangerously-skip-permissions") }
+        if let sessionId { arguments += ["--resume", sessionId] }
+        proc.arguments = arguments
+        resumedSessionId = sessionId
+        sawInit = false
+        messagesToProcess = []
+        lineBuffer = ""
+        outputGeneration += 1
+        let generation = outputGeneration
+
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: workingDirectory.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            proc.currentDirectoryURL = workingDirectory
+        } else {
+            notice("**Can't find the folder \(Self.displayPath(workingDirectory)),** so Claude is working in your home folder. Pick another one from the menu bar icon → Claude.")
+            proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        }
 
         // Use the shell environment captured from the user's login shell, not Xcode's
         // process environment. Xcode strips PATH and other vars that Claude CLI needs.
@@ -267,7 +305,8 @@ class ClaudeSession {
             guard !data.isEmpty else { handle.readabilityHandler = nil; return }
             if let text = String(data: data, encoding: .utf8) {
                 DispatchQueue.main.async {
-                    self?.processOutput(text)
+                    guard let self, self.outputGeneration == generation else { return }
+                    self.processOutput(text)
                 }
             }
         }
@@ -277,7 +316,8 @@ class ClaudeSession {
             guard !data.isEmpty else { handle.readabilityHandler = nil; return }
             if let text = String(data: data, encoding: .utf8) {
                 DispatchQueue.main.async {
-                    self?.handleStderr(text)
+                    guard let self, self.outputGeneration == generation else { return }
+                    self.handleStderr(text)
                 }
             }
         }
@@ -302,6 +342,7 @@ class ClaudeSession {
     func send(message: String) {
         history.append(Message(role: .user, text: message))
         isBusy = true
+        replyText = ""
         guard isRunning else {
             // Starts on demand: first message, after a crash, or after logging in.
             pendingMessages.append(message)
@@ -309,6 +350,45 @@ class ClaudeSession {
             return
         }
         write(message)
+    }
+
+    /// Ends the current answer. The next message continues the same conversation.
+    func stop() {
+        guard isBusy else { return }
+        pendingMessages.removeAll()
+        if !replyText.isEmpty {
+            history.append(Message(role: .assistant, text: replyText))
+            replyText = ""
+        }
+        terminate()
+        isBusy = false
+        status = .idle
+        notice(Self.stoppedByUserNotice)
+    }
+
+    /// Forgets the conversation; the next message starts a brand-new one.
+    func reset() {
+        terminate()
+        pendingMessages.removeAll()
+        history.removeAll()
+        sessionId = nil
+        replyText = ""
+        isBusy = false
+        status = .idle
+    }
+
+    /// Restarts Claude so new folder / permission settings apply on the next message.
+    func applySettings(newConversation: Bool, notice text: String) {
+        if isBusy { stop() }
+        terminate()
+        status = .idle
+        // Saved chats belong to the folder they ran in, so a new folder means a new chat.
+        if newConversation { sessionId = nil }
+        notice(text)
+    }
+
+    static func displayPath(_ url: URL) -> String {
+        (url.path as NSString).abbreviatingWithTildeInPath
     }
 
     private func write(_ message: String) {
@@ -326,6 +406,7 @@ class ClaudeSession {
         data.append(0x0A)
         do {
             try pipe.fileHandleForWriting.write(contentsOf: data)
+            messagesToProcess.append(message)
         } catch {
             terminate()
             goOffline("stopped", notice: Self.stoppedNotice)
@@ -334,7 +415,11 @@ class ClaudeSession {
 
     func terminate() {
         isRunning = false
+        // Anything the old process still prints (half an answer, a late result) must not reach the chat.
+        outputGeneration += 1
         process?.terminate()
+        process = nil
+        inputPipe = nil
     }
 
     private func goOffline(_ reason: String, notice text: String) {
@@ -360,9 +445,28 @@ class ClaudeSession {
     private func handleStderr(_ text: String) {
         if Self.isLoginProblem(text, isError: true) {
             reportLoginProblem()
+        } else if resumedSessionId != nil, text.contains("No conversation found") {
+            // Handled when the matching result arrives: we start a fresh chat instead.
+            return
         } else {
             onError?(text)
         }
+    }
+
+    /// The CLI didn't know the saved chat (deleted, or made in another folder): start fresh and re-send.
+    private func recoverFromRejectedResume() {
+        let unanswered = messagesToProcess
+        terminate()
+        sessionId = nil
+        notice(Self.freshStartNotice)
+        guard !unanswered.isEmpty else {
+            isBusy = false
+            status = .idle
+            return
+        }
+        pendingMessages = unanswered + pendingMessages
+        isBusy = true
+        start()
     }
 
     private static func isLoginProblem(_ text: String, isError: Bool) -> Bool {
@@ -401,6 +505,11 @@ class ClaudeSession {
 
         switch type {
         case "system":
+            if json["subtype"] as? String == "init" {
+                sawInit = true
+                if let id = json["session_id"] as? String { sessionId = id }
+                break
+            }
             // The CLI silently retries failed API calls for minutes; bail out early on the hopeless ones.
             guard json["subtype"] as? String == "api_retry" else { break }
             let httpStatus = json["error_status"] as? Int
@@ -417,6 +526,7 @@ class ClaudeSession {
                 for block in content {
                     let blockType = block["type"] as? String ?? ""
                     if blockType == "text", let text = block["text"] as? String {
+                        replyText += text
                         onText?(text)
                     } else if blockType == "tool_use" {
                         let toolName = block["name"] as? String ?? "Tool"
@@ -458,7 +568,14 @@ class ClaudeSession {
             }
 
         case "result":
+            // A rejected --resume answers with an error result before ever sending system/init.
+            if resumedSessionId != nil && !sawInit {
+                recoverFromRejectedResume()
+                return
+            }
+            if !messagesToProcess.isEmpty { messagesToProcess.removeFirst() }
             isBusy = false
+            replyText = ""
             let result = json["result"] as? String ?? ""
             let isError = json["is_error"] as? Bool ?? false
             if Self.isLoginProblem(result, isError: isError) {

@@ -1,42 +1,40 @@
 import AppKit
 
-class PaddedTextFieldCell: NSTextFieldCell {
-    private let inset = NSSize(width: 8, height: 2)
+/// Chat input: Return sends, Shift+Return or Option+Return starts a new line.
+final class ChatInputView: NSTextView {
+    var onSubmit: (() -> Void)?
+    var placeholder: NSAttributedString? { didSet { needsDisplay = true } }
+    private var newlineModifierHeld = false
 
-    override var focusRingType: NSFocusRingType {
-        get { .none }
-        set {}
+    override func keyDown(with event: NSEvent) {
+        newlineModifierHeld = !event.modifierFlags.intersection([.shift, .option]).isEmpty
+        super.keyDown(with: event)
+        newlineModifierHeld = false
     }
 
-    override func draw(withFrame cellFrame: NSRect, in controlView: NSView) {
-        drawInterior(withFrame: cellFrame, in: controlView)
-    }
-
-    override func drawingRect(forBounds rect: NSRect) -> NSRect {
-        let base = super.drawingRect(forBounds: rect)
-        return base.insetBy(dx: inset.width, dy: inset.height)
-    }
-
-    private func configureEditor(_ textObj: NSText) {
-        if let color = textColor {
-            textObj.textColor = color
+    // Return while composing (Chinese/Japanese input) only confirms the composition, never sends.
+    override func doCommand(by selector: Selector) {
+        if selector == #selector(insertNewline(_:)) && hasMarkedText() {
+            unmarkText()
+            return
         }
-        if let tv = textObj as? NSTextView {
-            tv.insertionPointColor = textColor ?? .textColor
-            tv.drawsBackground = false
-            tv.backgroundColor = .clear
+        if selector == #selector(insertNewline(_:)) && !newlineModifierHeld {
+            onSubmit?()
+            return
         }
-        textObj.font = font
+        super.doCommand(by: selector)
     }
 
-    override func edit(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, event: NSEvent?) {
-        configureEditor(textObj)
-        super.edit(withFrame: rect.insetBy(dx: inset.width, dy: inset.height), in: controlView, editor: textObj, delegate: delegate, event: event)
+    override func didChangeText() {
+        super.didChangeText()
+        needsDisplay = true  // show/hide the placeholder
     }
 
-    override func select(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, start selStart: Int, length selLength: Int) {
-        configureEditor(textObj)
-        super.select(withFrame: rect.insetBy(dx: inset.width, dy: inset.height), in: controlView, editor: textObj, delegate: delegate, start: selStart, length: selLength)
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty, let placeholder else { return }
+        let x = textContainerOrigin.x + (textContainer?.lineFragmentPadding ?? 0)
+        placeholder.draw(at: NSPoint(x: x, y: textContainerOrigin.y))
     }
 }
 
@@ -44,14 +42,25 @@ class TerminalView: NSView, NSTextViewDelegate {
     let scrollView = NSScrollView()
     let textView = NSTextView()
     let inputBar = NSView()
-    let inputField = NSTextField()
+    private let inputScroll = NSScrollView()
+    let inputField = ChatInputView(frame: .zero)
     private let sendButton = NSButton()
     private let emptyStateLabel = NSTextField(wrappingLabelWithString: "Ask me anything.\nI can read files, run commands and write code.")
     var onSendMessage: ((String) -> Void)?
+    var onStop: (() -> Void)?
     var onAction: ((String) -> Void)?  // host of a clicked claudepet:// link
 
     private var currentAssistantText = ""
     private let characterColor: NSColor?
+    private var isBusy = false
+
+    // Input geometry: the pill grows with the text up to maxInputLines, then scrolls.
+    private static let padding: CGFloat = 14
+    private static let inputBottom: CGFloat = 12
+    private static let barInset: CGFloat = 6
+    private static let textInset = NSSize(width: 2, height: 3)
+    private static let maxInputLines: CGFloat = 5
+    private var inputLineHeight: CGFloat = 16
 
     init(frame: NSRect, characterColor: NSColor?) {
         self.characterColor = characterColor
@@ -76,9 +85,10 @@ class TerminalView: NSView, NSTextViewDelegate {
 
     private func setupViews() {
         let t = theme
-        let inputHeight: CGFloat = 34
-        let padding: CGFloat = 14
-        let inputBottom: CGFloat = 12
+        let padding = Self.padding
+        inputLineHeight = ceil(NSLayoutManager().defaultLineHeight(for: t.font))
+        let inputHeight = inputLineHeight + Self.textInset.height * 2 + Self.barInset * 2
+        let inputBottom = Self.inputBottom
 
         scrollView.frame = NSRect(
             x: padding - 4, y: inputBottom + inputHeight + 8,
@@ -129,25 +139,37 @@ class TerminalView: NSView, NSTextViewDelegate {
         inputBar.autoresizingMask = [.width]
         inputBar.wantsLayer = true
         inputBar.layer?.backgroundColor = t.inputBg.cgColor
-        inputBar.layer?.cornerRadius = inputHeight / 2
+        inputBar.layer?.cornerRadius = min(inputHeight / 2, 17)
         inputBar.layer?.borderWidth = 1
         inputBar.layer?.borderColor = t.separatorColor.cgColor
         addSubview(inputBar)
 
-        inputField.frame = NSRect(x: 6, y: (inputHeight - 22) / 2, width: barWidth - 6 - 34, height: 22)
+        inputScroll.drawsBackground = false
+        inputScroll.borderType = .noBorder
+        inputScroll.hasVerticalScroller = false
+        inputScroll.hasHorizontalScroller = false
+        inputScroll.autoresizingMask = [.width]
+        inputBar.addSubview(inputScroll)
+
+        inputField.isRichText = false
+        inputField.importsGraphics = false
+        inputField.allowsUndo = true
+        inputField.drawsBackground = false
+        inputField.font = t.font
+        inputField.textColor = t.textPrimary
+        inputField.insertionPointColor = t.textPrimary
+        inputField.textContainerInset = Self.textInset
+        // Code and commands get typed here: keep quotes and dashes exactly as typed.
+        inputField.isAutomaticQuoteSubstitutionEnabled = false
+        inputField.isAutomaticDashSubstitutionEnabled = false
+        inputField.isAutomaticTextReplacementEnabled = false
+        inputField.isVerticallyResizable = true
+        inputField.isHorizontallyResizable = false
         inputField.autoresizingMask = [.width]
-        inputField.focusRingType = .none
-        let paddedCell = PaddedTextFieldCell(textCell: "")
-        paddedCell.isEditable = true
-        paddedCell.isScrollable = true
-        paddedCell.font = t.font
-        paddedCell.textColor = t.textPrimary
-        paddedCell.drawsBackground = false
-        paddedCell.isBezeled = false
-        inputField.cell = paddedCell
-        inputField.target = self
-        inputField.action = #selector(inputSubmitted)
-        inputBar.addSubview(inputField)
+        inputField.textContainer?.widthTracksTextView = true
+        inputField.delegate = self
+        inputField.onSubmit = { [weak self] in self?.submitInput() }
+        inputScroll.documentView = inputField
 
         sendButton.image = NSImage(systemSymbolName: "arrow.up.circle.fill", accessibilityDescription: "Send")
         sendButton.symbolConfiguration = .init(pointSize: 20, weight: .regular)
@@ -157,20 +179,80 @@ class TerminalView: NSView, NSTextViewDelegate {
         sendButton.frame = NSRect(x: barWidth - 32, y: (inputHeight - 28) / 2, width: 28, height: 28)
         sendButton.autoresizingMask = [.minXMargin]
         sendButton.target = self
-        sendButton.action = #selector(inputSubmitted)
+        sendButton.action = #selector(sendButtonClicked)
         inputBar.addSubview(sendButton)
+
+        layoutInput()
     }
 
     // MARK: - Input
 
-    @objc private func inputSubmitted() {
-        let text = inputField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    func textDidChange(_ notification: Notification) {
+        guard notification.object as AnyObject? === inputField else { return }
+        layoutInput()
+    }
+
+    /// Sizes the input to its text (1...maxInputLines lines) and gives the rest to the transcript.
+    func layoutInput() {
+        guard let layoutManager = inputField.layoutManager, let container = inputField.textContainer else { return }
+        let barWidth = bounds.width - Self.padding * 2
+        let fieldWidth = barWidth - Self.barInset - 2 - 34
+        if inputField.frame.width != fieldWidth {
+            inputField.frame.size.width = fieldWidth
+        }
+        layoutManager.ensureLayout(for: container)
+        let textHeight = ceil(layoutManager.usedRect(for: container).height)
+        let visibleText = min(max(textHeight, inputLineHeight), inputLineHeight * Self.maxInputLines)
+        let fieldHeight = visibleText + Self.textInset.height * 2
+        let barHeight = fieldHeight + Self.barInset * 2
+        let oldBarHeight = inputBar.frame.height
+
+        inputBar.frame = NSRect(x: Self.padding, y: Self.inputBottom, width: barWidth, height: barHeight)
+        inputScroll.frame = NSRect(x: Self.barInset + 2, y: Self.barInset, width: fieldWidth, height: fieldHeight)
+        inputField.minSize = NSSize(width: 0, height: fieldHeight)
+        inputField.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        inputField.sizeToFit()
+        let transcriptY = Self.inputBottom + barHeight + 8
+        scrollView.frame = NSRect(
+            x: Self.padding - 4, y: transcriptY,
+            width: bounds.width - (Self.padding - 4) * 2,
+            height: max(bounds.height - transcriptY - 6, 0)
+        )
+        inputField.scrollRangeToVisible(inputField.selectedRange())
+        if barHeight != oldBarHeight { textView.scrollToEndOfDocument(nil) }
+    }
+
+    @objc private func sendButtonClicked() {
+        if isBusy { onStop?() } else { submitInput() }
+    }
+
+    private func submitInput() {
+        let text = inputField.string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        inputField.stringValue = ""
+        inputField.string = ""
+        layoutInput()
 
         appendUser(text)
         currentAssistantText = ""
         onSendMessage?(text)
+    }
+
+    /// While Claude is answering the send button becomes Stop. Return still sends (queued).
+    func setBusy(_ busy: Bool) {
+        guard busy != isBusy else { return }
+        isBusy = busy
+        sendButton.image = NSImage(
+            systemSymbolName: busy ? "stop.circle.fill" : "arrow.up.circle.fill",
+            accessibilityDescription: busy ? "Stop" : "Send"
+        )
+        sendButton.toolTip = busy ? "Stop Claude" : nil
+    }
+
+    /// Empties the transcript (New chat).
+    func clear() {
+        textView.textStorage?.setAttributedString(NSAttributedString(string: ""))
+        currentAssistantText = ""
+        scrollToBottom()
     }
 
     // MARK: - Append Methods
@@ -293,11 +375,10 @@ class TerminalView: NSView, NSTextViewDelegate {
 
     func setPetName(_ name: String) {
         let t = theme
-        (inputField.cell as? NSTextFieldCell)?.placeholderAttributedString = NSAttributedString(
+        inputField.placeholder = NSAttributedString(
             string: "Ask \(name)…",
             attributes: [.font: t.font, .foregroundColor: t.textDim]
         )
-        inputField.needsDisplay = true
     }
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {

@@ -5,6 +5,46 @@ class KeyableWindow: NSWindow {
     override var canBecomeMain: Bool { true }
 }
 
+/// A sprite's alpha channel, read once so clicks can be tested without capturing the screen.
+struct AlphaMask {
+    let width: Int
+    let height: Int
+    private let alpha: [UInt8]  // row 0 = top of the image
+
+    init?(image: CGImage) {
+        let w = image.width, h = image.height
+        var pixels = [UInt8](repeating: 0, count: w * h)
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let ctx = CGContext(
+                data: buffer.baseAddress, width: w, height: h,
+                bitsPerComponent: 8, bytesPerRow: w,
+                space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue
+            ) else { return false }
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard drawn else { return nil }
+        width = w
+        height = h
+        alpha = pixels
+    }
+
+    /// `point` is in a view of `bounds` showing the image with `.resizeAspect`, optionally mirrored left-right.
+    func isOpaque(at point: CGPoint, in bounds: CGRect, mirrored: Bool, threshold: UInt8 = 30) -> Bool {
+        guard width > 0, height > 0 else { return false }
+        let scale = min(bounds.width / CGFloat(width), bounds.height / CGFloat(height))
+        let fitW = CGFloat(width) * scale, fitH = CGFloat(height) * scale
+        let originX = bounds.minX + (bounds.width - fitW) / 2
+        let originY = bounds.minY + (bounds.height - fitH) / 2
+        let x = mirrored ? bounds.minX + bounds.maxX - point.x : point.x
+        let px = Int(((x - originX) / scale).rounded(.down))
+        let pyFromBottom = Int(((point.y - originY) / scale).rounded(.down))
+        guard px >= 0, px < width, pyFromBottom >= 0, pyFromBottom < height else { return false }
+        return alpha[(height - 1 - pyFromBottom) * width + px] > threshold
+    }
+}
+
 class CharacterContentView: NSView {
     weak var character: WalkerCharacter?
     private var trackingArea: NSTrackingArea?
@@ -52,38 +92,9 @@ class CharacterContentView: NSView {
         let localPoint = convert(point, from: superview)
         guard bounds.contains(localPoint) else { return nil }
 
-        // Sample on-screen alpha at the click point (works for CALayer bitmap contents too).
-        let screenPoint = window?.convertPoint(toScreen: convert(localPoint, to: nil)) ?? .zero
-        // Use the full virtual display height for the CG coordinate flip, not just
-        // the main screen. NSScreen coordinates have origin at bottom-left of the
-        // primary display, while CG uses top-left. The primary screen's height is
-        // the correct basis for the flip across all monitors.
-        guard let primaryScreen = NSScreen.screens.first else { return nil }
-        let flippedY = primaryScreen.frame.height - screenPoint.y
-
-        let captureRect = CGRect(x: screenPoint.x - 0.5, y: flippedY - 0.5, width: 1, height: 1)
-        guard let windowID = window?.windowNumber, windowID > 0 else { return nil }
-
-        if let image = CGWindowListCreateImage(
-            captureRect,
-            .optionIncludingWindow,
-            CGWindowID(windowID),
-            [.boundsIgnoreFraming, .bestResolution]
-        ) {
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
-            var pixel: [UInt8] = [0, 0, 0, 0]
-            if let ctx = CGContext(
-                data: &pixel, width: 1, height: 1,
-                bitsPerComponent: 8, bytesPerRow: 4,
-                space: colorSpace,
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) {
-                ctx.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-                if pixel[3] > 30 {
-                    return self
-                }
-                return nil
-            }
+        // Transparent pixels let clicks through to whatever is underneath.
+        if let hit = character?.spriteContains(localPoint, in: bounds) {
+            return hit ? self : nil
         }
 
         // Fallback: accept click if within center 60% of the view
@@ -111,9 +122,8 @@ class CharacterContentView: NSView {
         
         if !isDragging && (abs(deltaX) > 5 || abs(deltaY) > 5) {
             isDragging = true
-            character?.isPinnedByUser = true
-            // Ensure animation keeps playing when dragged
-            character?.resumeSpriteMotionIfPinned()
+            character?.isBeingDragged = true
+            character?.keepLegsMovingWhileDragged()
         }
         
         if isDragging {
@@ -127,7 +137,9 @@ class CharacterContentView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        if !isDragging {
+        if isDragging {
+            character?.finishDrag()
+        } else {
             character?.handleClick()
         }
         isDragging = false

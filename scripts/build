@@ -19,12 +19,12 @@ for arg in "$@"; do
   esac
 done
 
-echo "==> Regenerating claude_* sprites (RGBA, transparent background)"
+DERIVED="${ROOT}/.derivedData"
 
-echo "==> xcodebuild (scheme DoggoAgent, Debug)"
+echo "==> xcodebuild (scheme claude-pet, Debug)"
 xcodebuild \
   -project claude-pet.xcodeproj \
-  -scheme DoggoAgent \
+  -scheme claude-pet \
   -configuration Debug \
   clean build ONLY_ACTIVE_ARCH=YES \
   -derivedDataPath "$DERIVED" \

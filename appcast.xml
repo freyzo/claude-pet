@@ -2,31 +2,22 @@
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
     <channel>
         <title>claude-pet</title>
-        <link>https://github.com/ryanstephen/doggo-agent</link>
+        <link>https://github.com/freyzo/claude-pet</link>
         <description>claude-pet update feed</description>
         <language>en</language>
         <!--
+            One-time setup (owner only):
+            a. Run Sparkle's generate_keys (private key is stored in your login Keychain)
+            b. Replace SUPublicEDKey in ClaudePet/Info.plist with the printed public key
+               (the current key belongs to the upstream project; updates can't be signed until it's swapped)
+
             To publish a new release:
             1. Build, sign, notarize, staple the app
             2. Create zip: ditto -c -k - -keepParent claude-pet.app claude-pet-vX.Y.zip
             3. Sign for Sparkle: sign_update claude-pet-vX.Y.zip
             4. Add a new <item> below with the edSignature and length
-            5. Upload zip to GitHub Releases
-            6. Commit appcast.xml and push
+            5. Upload zip to GitHub Releases (github.com/freyzo/claude-pet)
+            6. Commit appcast.xml and push to main (the app reads it from raw.githubusercontent.com)
         -->
-        <item>
-            <title>v1.0</title>
-            <description>First release of claude-pet.</description>
-            <pubDate>Sun, 22 Mar 2026 23:35:00 -0700</pubDate>
-            <sparkle:version>1</sparkle:version>
-            <sparkle:shortVersionString>1.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/ryanstephen/doggo-agent/releases/download/v1.0/claude-pet-v1.0.zip"
-                type="application/octet-stream"
-                sparkle:edSignature="Cc5qFPqcDKUBaW2YtJucY5EupoBrYZ5JFvTGR/5QwYLEejO0IQerIlMMaL//pi7ZuBHUoQRw4RLVtXaR+vlVCw=="
-                length="20255742"
-            />
-        </item>
     </channel>
 </rss>

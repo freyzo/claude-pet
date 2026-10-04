@@ -49,12 +49,12 @@
 		A10000050000000000000001 = {
 			isa = PBXGroup;
 			children = (
-				A10000050000000000000002 /* DoggoAgent */,
+				A10000050000000000000002 /* ClaudePet */,
 				A10000050000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		A10000050000000000000002 /* DoggoAgent */ = {
+		A10000050000000000000002 /* ClaudePet */ = {
 			isa = PBXGroup;
 			children = (
 				A10000020000000000000001 /* ClaudePetApp.swift */,
@@ -83,9 +83,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		A10000060000000000000001 /* DoggoAgent */ = {
+		A10000060000000000000001 /* claude-pet */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A10000080000000000000001 /* Build configuration list for PBXNativeTarget "DoggoAgent" */;
+			buildConfigurationList = A10000080000000000000001 /* Build configuration list for PBXNativeTarget "claude-pet" */;
 			buildPhases = (
 				A10000070000000000000001 /* Sources */,
 				A10000040000000000000001 /* Frameworks */,
@@ -95,7 +95,7 @@
 			);
 			dependencies = (
 			);
-			name = DoggoAgent;
+			name = "claude-pet";
 			packageProductDependencies = (
 				A1000000B000000000000002 /* Sparkle */,
 			);
@@ -118,7 +118,7 @@
 					};
 				};
 			};
-			buildConfigurationList = A10000080000000000000002 /* Build configuration list for PBXProject "doggo-agent" */;
+			buildConfigurationList = A10000080000000000000002 /* Build configuration list for PBXProject "claude-pet" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -134,7 +134,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				A10000060000000000000001 /* DoggoAgent */,
+				A10000060000000000000001 /* claude-pet */,
 			);
 		};
 /* End PBXProject section */
@@ -330,7 +330,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A10000080000000000000001 /* Build configuration list for PBXNativeTarget "DoggoAgent" */ = {
+		A10000080000000000000001 /* Build configuration list for PBXNativeTarget "claude-pet" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A1000000A000000000000003 /* Debug */,
@@ -339,7 +339,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		A10000080000000000000002 /* Build configuration list for PBXProject "doggo-agent" */ = {
+		A10000080000000000000002 /* Build configuration list for PBXProject "claude-pet" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A1000000A000000000000001 /* Debug */,

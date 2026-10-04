@@ -42,6 +42,7 @@ class WalkerCharacter {
     var spriteLayer: CALayer!
     // [idle, walk1, walk2]
     private var spriteImages: [CGImage] = []
+    private var spriteMasks: [AlphaMask] = []
     private let spriteIdleName: String
     private let spriteWalk1Name: String
     private let spriteWalk2Name: String
@@ -49,13 +50,12 @@ class WalkerCharacter {
     private var walkFrameInterval: TimeInterval = 0.3
     private var walkAnimStep: Int = 0
 
-    var videoWidth: CGFloat = 64
-    var videoHeight: CGFloat = 64
     var displayHeight: CGFloat = 300
-    var displayWidth: CGFloat { displayHeight * (videoWidth / videoHeight) }
+    private var spriteAspect: CGFloat = 1  // width / height of the idle sprite
+    var displayWidth: CGFloat { displayHeight * spriteAspect }
 
-    // Walk timing (per-character, from frame analysis)
-    var videoDuration: CFTimeInterval = 10.0
+    // Stroll easing timeline in seconds: speed up, cruise, slow down, stop.
+    var strollDuration: CFTimeInterval = 10.0
     var accelStart: CFTimeInterval = 3.0
     var fullSpeedStart: CFTimeInterval = 3.75
     var decelStart: CFTimeInterval = 7.5
@@ -63,7 +63,7 @@ class WalkerCharacter {
     var characterColor: NSColor = .gray
     var name = "Stitch"
 
-    // Walk state - now 2D across entire screen
+    // Walk state; positions are 0...1 fractions of the active screen
     var walkStartTime: CFTimeInterval = 0
     var positionX: CGFloat = 0.5
     var positionY: CGFloat = 0.1
@@ -91,8 +91,11 @@ class WalkerCharacter {
     // Onboarding
     var isOnboarding = false
 
-    // User pinned (dragged to custom position)
-    var isPinnedByUser = false
+    // True only while the user is carrying the pet.
+    var isBeingDragged = false
+
+    // Moving windows need every frame; a resting pet only checks timers and the cursor.
+    var needsSmoothFrames: Bool { isWalking || isBeingDragged }
     
     // Hover interaction state
     var isHovered = false
@@ -118,6 +121,7 @@ class WalkerCharacter {
     private weak var popoverNameLabel: NSTextField?
     private weak var popoverStatusLabel: NSTextField?
     private weak var popoverStatusDot: NSView?
+    private weak var newChatButton: NSButton?
     private var shownStatusText: String?
 
     init(
@@ -182,6 +186,8 @@ class WalkerCharacter {
         }
 
         spriteImages = [idleImg, w1, w2]
+        spriteMasks = spriteImages.compactMap(AlphaMask.init(image:))
+        spriteAspect = CGFloat(idleImg.width) / CGFloat(max(idleImg.height, 1))
 
         spriteLayer = CALayer()
         spriteLayer.contents = idleImg
@@ -222,6 +228,12 @@ class WalkerCharacter {
         window.orderFrontRegardless()
     }
 
+    /// Whether the visible sprite frame has a solid pixel at `point`; nil if the masks couldn't be built.
+    func spriteContains(_ point: CGPoint, in bounds: CGRect) -> Bool? {
+        guard spriteMasks.count == spriteImages.count, spriteMasks.indices.contains(walkAnimStep) else { return nil }
+        return spriteMasks[walkAnimStep].isOpaque(at: point, in: bounds, mirrored: !goingRight)
+    }
+
     private func invalidateWalkTimer() {
         walkFrameTimer?.invalidate()
         walkFrameTimer = nil
@@ -250,17 +262,30 @@ class WalkerCharacter {
 
     private func advanceWalkSpriteFrame() {
         guard spriteImages.count >= 3 else { return }
-        let pinnedVisual = isPinnedByUser
-        guard isWalking || pinnedVisual else { return }
+        guard isWalking || isBeingDragged else { return }
         walkAnimStep = (walkAnimStep == 1) ? 2 : 1
         spriteLayer?.contents = spriteImages[walkAnimStep]
     }
 
-    /// Keep leg cycle running when the user pinned the window (replaces forcing `AVQueuePlayer` to play).
-    func resumeSpriteMotionIfPinned() {
-        guard isPinnedByUser, spriteImages.count >= 3 else { return }
-        if walkFrameTimer != nil, walkFrameTimer!.isValid { return }
+    // Legs keep paddling while the pet is carried.
+    func keepLegsMovingWhileDragged() {
+        guard isBeingDragged, spriteImages.count >= 3 else { return }
+        if walkFrameTimer?.isValid == true { return }
         startWalkSpriteTimer()
+    }
+
+    func finishDrag() {
+        isBeingDragged = false
+        if let frame = activeScreen?.frame {
+            // Roam on from the drop spot instead of snapping back to the pre-drag position.
+            let origin = window.frame.origin
+            let maxY = max(frame.height - displayHeight, 0) / frame.height
+            positionX = min(max((origin.x - frame.minX) / max(frame.width - displayWidth, 1), 0), 1)
+            positionY = min(max((origin.y - frame.minY) / frame.height, 0), maxY)
+        }
+        // The cursor is still on the pet after a drop; that's not "cursor approached", so no flee.
+        cursorWasNear = true
+        enterPause()
     }
 
     /// Stop motion when the character window is hidden from the menu.
@@ -297,12 +322,14 @@ class WalkerCharacter {
 
         // Show static welcome message instead of Claude terminal
         terminalView?.inputBar.isHidden = true
+        let buddies = (controller?.pets ?? []).filter { $0 !== self }.map(\.name)
+        let buddyLine = buddies.isEmpty ? "" : "my buddy \(buddies.joined(separator: " and ")) roams too, and each of us has our own chat.\n\n"
         terminalView?.appendNotice("""
         **aloha! i'm \(name), your naughty lil desktop pet.**
 
         i roam around your screen. hover over me for a hi, click me anytime to chat with Claude.
 
-        [give me a name](claudepet://rename) (or later: menu bar icon → Rename Pet…)
+        \(buddyLine)[give me a name](claudepet://rename) (or later: menu bar icon → Rename Pet)
 
         click outside to close, then click me again to start chatting!
         """)
@@ -346,6 +373,10 @@ class WalkerCharacter {
 
         if claudeSession == nil {
             let session = ClaudeSession()
+            if let controller {
+                session.workingDirectory = controller.workingFolder
+                session.allowsEdits = controller.allowsEdits
+            }
             claudeSession = session
             wireSession(session)
         }
@@ -437,6 +468,11 @@ class WalkerCharacter {
     }
 
     private func refreshPopoverStatus() {
+        terminalView?.setBusy(isClaudeBusy)
+        // Nothing to clear yet: a live-looking button that does nothing reads as broken.
+        let canStartNewChat = !(claudeSession?.history.isEmpty ?? true) || isClaudeBusy
+        newChatButton?.isEnabled = canStartNewChat
+        newChatButton?.alphaValue = canStartNewChat ? 1 : 0.35
         guard let label = popoverStatusLabel else { return }
         let (text, color) = popoverStatus()
         guard text != shownStatusText else { return }
@@ -461,6 +497,22 @@ class WalkerCharacter {
         terminalView?.setPetName(newName)
     }
 
+    func startNewChat() {
+        claudeSession?.reset()
+        terminalView?.clear()
+        terminalView?.setBusy(false)
+        refreshPopoverStatus()
+    }
+
+    /// Hands new folder / permission settings to a running chat; a session created later reads them itself.
+    func applyClaudeSettings(newConversation: Bool, notice: String) {
+        guard let session = claudeSession, let controller else { return }
+        session.workingDirectory = controller.workingFolder
+        session.allowsEdits = controller.allowsEdits
+        session.applySettings(newConversation: newConversation, notice: notice)
+        terminalView?.setBusy(false)
+    }
+
     private func handleChatAction(_ action: String) {
         switch action {
         case "login":
@@ -468,7 +520,7 @@ class WalkerCharacter {
         case "install":
             if !ClaudeSession.openInstallInTerminal() { terminalView?.appendError("Couldn't open Terminal.") }
         case "rename":
-            controller?.promptRename()
+            controller?.promptRename(self)
         default:
             break
         }
@@ -564,6 +616,18 @@ class WalkerCharacter {
         closeButton.autoresizingMask = [.minXMargin]
         titleBar.addSubview(closeButton)
 
+        let newChatButton = ActionButton(symbol: "plus.bubble", label: "New Chat") { [weak self] in
+            self?.startNewChat()
+        }
+        newChatButton.symbolConfiguration = .init(pointSize: 12, weight: .semibold)
+        newChatButton.contentTintColor = t.textDim
+        newChatButton.toolTip = "New chat (clears this conversation)"
+        newChatButton.frame = NSRect(x: popoverWidth - 64, y: (headerHeight - 22) / 2, width: 22, height: 22)
+        newChatButton.autoresizingMask = [.minXMargin]
+        newChatButton.isHidden = isOnboarding
+        titleBar.addSubview(newChatButton)
+        self.newChatButton = newChatButton
+
         let sep = NSView(frame: NSRect(x: 0, y: popoverHeight - headerHeight - 1, width: popoverWidth, height: 1))
         sep.wantsLayer = true
         sep.layer?.backgroundColor = t.separatorColor.cgColor
@@ -576,8 +640,13 @@ class WalkerCharacter {
         )
         terminal.autoresizingMask = [.width, .height]
         terminal.setPetName(name)
-        terminal.onSendMessage = { [weak self] message in
+        terminal.onSendMessage = { [weak self, weak terminal] message in
             self?.claudeSession?.send(message: message)
+            terminal?.setBusy(self?.isClaudeBusy ?? false)
+        }
+        terminal.onStop = { [weak self, weak terminal] in
+            self?.claudeSession?.stop()
+            terminal?.setBusy(false)
         }
         terminal.onAction = { [weak self] action in
             self?.handleChatAction(action)
@@ -600,6 +669,7 @@ class WalkerCharacter {
         }
 
         session.onTurnComplete = { [weak self] in
+            self?.terminalView?.setBusy(false)
             self?.playCompletionSound()
             self?.showCompletionBubble()
         }
@@ -669,17 +739,17 @@ class WalkerCharacter {
         let now = CACurrentMediaTime()
 
         if showingCompletion {
+            // Hidden while the chat is open; closePopover restarts the countdown.
+            if isIdleForPopover {
+                hideBubble()
+                return
+            }
             if now >= completionBubbleExpiry {
                 showingCompletion = false
                 hideBubble()
                 return
             }
-            if isIdleForPopover {
-                completionBubbleExpiry += 1.0 / 60.0
-                hideBubble()
-            } else {
-                showBubble(text: currentPhrase, isCompletion: true)
-            }
+            showBubble(text: currentPhrase, isCompletion: true)
             return
         }
 
@@ -874,15 +944,7 @@ class WalkerCharacter {
         
         if !hoverReactionShown {
             hoverReactionShown = true
-            let phrase = Self.hoverPhrases.randomElement() ?? "hi!"
-            currentPhrase = phrase
-            showBubble(text: phrase, isCompletion: true)
-            
-            // Hide after 2 seconds
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                guard let self = self, self.isHovered else { return }
-                self.hideBubble()
-            }
+            blurt(Self.hoverPhrases, for: 2.0)
         }
     }
     
@@ -910,7 +972,7 @@ class WalkerCharacter {
 
         switch antic {
         case .stroll:
-            walkDuration = videoDuration
+            walkDuration = strollDuration
             pickTarget(distance: 0.1...0.4, yChance: 0.5, yRange: 0.15)
         case .zoomies:
             walkDuration = .random(in: 1.6...2.4)
@@ -1046,25 +1108,25 @@ class WalkerCharacter {
         CATransaction.commit()
     }
 
-    func movementPosition(at videoTime: CFTimeInterval) -> CGFloat {
+    func strollProgress(at time: CFTimeInterval) -> CGFloat {
         let dIn = fullSpeedStart - accelStart
         let dLin = decelStart - fullSpeedStart
         let dOut = walkStop - decelStart
         let v = 1.0 / (dIn / 2.0 + dLin + dOut / 2.0)
 
-        if videoTime <= accelStart {
+        if time <= accelStart {
             return 0.0
-        } else if videoTime <= fullSpeedStart {
-            let t = videoTime - accelStart
+        } else if time <= fullSpeedStart {
+            let t = time - accelStart
             return CGFloat(v * t * t / (2.0 * dIn))
-        } else if videoTime <= decelStart {
+        } else if time <= decelStart {
             let easeInDist = v * dIn / 2.0
-            let t = videoTime - fullSpeedStart
+            let t = time - fullSpeedStart
             return CGFloat(easeInDist + v * t)
-        } else if videoTime <= walkStop {
+        } else if time <= walkStop {
             let easeInDist = v * dIn / 2.0
             let linearDist = v * dLin
-            let t = videoTime - decelStart
+            let t = time - decelStart
             return CGFloat(easeInDist + linearDist + v * (t - t * t / (2.0 * dOut)))
         } else {
             return 1.0
@@ -1080,9 +1142,9 @@ class WalkerCharacter {
         let screenFrame = screen.frame
         refreshPopoverStatus()
 
-        // If user dragged character to custom position, keep animation playing at that spot
-        if isPinnedByUser {
-            if !isIdleForPopover { resumeSpriteMotionIfPinned() }
+        // The user is carrying the pet; CharacterContentView moves the window.
+        if isBeingDragged {
+            keepLegsMovingWhileDragged()
             updatePopoverPosition()
             updateThinkingBubble()
             return
@@ -1112,6 +1174,7 @@ class WalkerCharacter {
                 startWalk()
             } else {
                 placeWindow(in: screenFrame)
+                updateThinkingBubble()
                 return
             }
         }
@@ -1119,9 +1182,9 @@ class WalkerCharacter {
         if isWalking {
             let elapsed = now - walkStartTime
             // Stretch the stroll's ease-in/out curve over this antic's duration.
-            let curveTime = min(elapsed, walkDuration) * videoDuration / walkDuration
+            let curveTime = min(elapsed, walkDuration) * strollDuration / walkDuration
 
-            let walkNorm = elapsed >= walkDuration ? 1.0 : movementPosition(at: curveTime)
+            let walkNorm = elapsed >= walkDuration ? 1.0 : strollProgress(at: curveTime)
             
             // Interpolate X position
             positionX = walkStartX + (walkEndX - walkStartX) * CGFloat(walkNorm)

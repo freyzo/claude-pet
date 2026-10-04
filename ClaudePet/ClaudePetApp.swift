@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ServiceManagement
 import Sparkle
 
 @main
@@ -14,20 +15,35 @@ struct ClaudePetApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     var controller: ClaudePetController?
     var statusItem: NSStatusItem?
-    private weak var petVisibilityMenuItem: NSMenuItem?
+    private var petVisibilityItems: [NSMenuItem] = []
+    private var renameItems: [NSMenuItem] = []
+    private weak var displayMenu: NSMenu?
+    private weak var claudeMenu: NSMenu?
+    private weak var launchAtLoginItem: NSMenuItem?
     let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Writing to a Claude process that just died must be a recoverable error, not a crash.
         signal(SIGPIPE, SIG_IGN)
         NSApp.setActivationPolicy(.accessory)
+        restoreSettings()
         controller = ClaudePetController()
         controller?.start()
         setupMenuBar()
     }
 
+    private func restoreSettings() {
+        let defaults = UserDefaults.standard
+        defaults.register(defaults: [DefaultsKey.soundsEnabled: true])
+        WalkerCharacter.soundsEnabled = defaults.bool(forKey: DefaultsKey.soundsEnabled)
+        if let saved = defaults.string(forKey: DefaultsKey.theme),
+           let theme = PopoverTheme.allThemes.first(where: { $0.name == saved }) {
+            PopoverTheme.current = theme
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
-        controller?.pet?.claudeSession?.terminate()
+        controller?.pets.forEach { $0.claudeSession?.terminate() }
     }
 
     // MARK: - Menu Bar
@@ -41,18 +57,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.delegate = self
 
-        let petItem = NSMenuItem(title: "Show Pet", action: #selector(togglePet(_:)), keyEquivalent: "1")
-        menu.addItem(petItem)
-        petVisibilityMenuItem = petItem
+        let renameItem = NSMenuItem(title: "Rename Pet", action: nil, keyEquivalent: "")
+        let renameMenu = NSMenu()
+        renameItem.submenu = renameMenu
+        for (i, _) in (controller?.pets ?? []).enumerated() {
+            let showItem = NSMenuItem(title: "Show Pet", action: #selector(togglePet(_:)), keyEquivalent: "\(i + 1)")
+            showItem.tag = i
+            menu.addItem(showItem)
+            petVisibilityItems.append(showItem)
 
-        menu.addItem(NSMenuItem(title: "Rename Pet…", action: #selector(renamePet), keyEquivalent: "r"))
+            let item = NSMenuItem(title: "Pet", action: #selector(renamePet(_:)), keyEquivalent: "")
+            item.tag = i
+            renameMenu.addItem(item)
+            renameItems.append(item)
+        }
+        menu.addItem(renameItem)
 
-        syncPetMenuItem()
+        syncPetMenuItems()
 
         menu.addItem(NSMenuItem.separator())
 
         let soundItem = NSMenuItem(title: "Sounds", action: #selector(toggleSounds(_:)), keyEquivalent: "")
-        soundItem.state = .on
+        soundItem.state = WalkerCharacter.soundsEnabled ? .on : .off
         menu.addItem(soundItem)
 
         // Theme submenu
@@ -61,29 +87,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         for (i, theme) in PopoverTheme.allThemes.enumerated() {
             let item = NSMenuItem(title: theme.name, action: #selector(switchTheme(_:)), keyEquivalent: "")
             item.tag = i
-            item.state = i == 0 ? .on : .off
+            item.state = theme.name == PopoverTheme.current.name ? .on : .off
             themeMenu.addItem(item)
         }
         themeItem.submenu = themeMenu
         menu.addItem(themeItem)
 
-        // Display submenu
+        // Display submenu: rebuilt on every open so plugged/unplugged monitors show up.
         let displayItem = NSMenuItem(title: "Display", action: nil, keyEquivalent: "")
         let displayMenu = NSMenu()
-        let autoItem = NSMenuItem(title: "Auto (Main Display)", action: #selector(switchDisplay(_:)), keyEquivalent: "")
-        autoItem.tag = -1
-        autoItem.state = .on
-        displayMenu.addItem(autoItem)
-        displayMenu.addItem(NSMenuItem.separator())
-        for (i, screen) in NSScreen.screens.enumerated() {
-            let name = screen.localizedName
-            let item = NSMenuItem(title: name, action: #selector(switchDisplay(_:)), keyEquivalent: "")
-            item.tag = i
-            item.state = .off
-            displayMenu.addItem(item)
-        }
+        displayMenu.delegate = self
         displayItem.submenu = displayMenu
         menu.addItem(displayItem)
+        self.displayMenu = displayMenu
+
+        // Claude submenu: where it works and what it may do. Rebuilt on open.
+        let claudeItem = NSMenuItem(title: "Claude", action: nil, keyEquivalent: "")
+        let claudeMenu = NSMenu()
+        claudeMenu.delegate = self
+        claudeItem.submenu = claudeMenu
+        menu.addItem(claudeItem)
+        self.claudeMenu = claudeMenu
+
+        menu.addItem(NSMenuItem.separator())
+
+        let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
+        menu.addItem(loginItem)
+        launchAtLoginItem = loginItem
+        syncLaunchAtLoginItem()
 
         menu.addItem(NSMenuItem.separator())
 
@@ -105,6 +136,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let idx = sender.tag
         guard idx < PopoverTheme.allThemes.count else { return }
         PopoverTheme.current = PopoverTheme.allThemes[idx]
+        UserDefaults.standard.set(PopoverTheme.current.name, forKey: DefaultsKey.theme)
 
         if let themeMenu = sender.menu {
             for item in themeMenu.items {
@@ -112,13 +144,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        guard let pet = controller?.pet else { return }
-        let wasOpen = pet.isIdleForPopover
-        if wasOpen { pet.popoverWindow?.orderOut(nil) }
-        pet.popoverWindow = nil
-        pet.terminalView = nil
-        pet.thinkingBubbleWindow = nil
-        if wasOpen {
+        for pet in controller?.pets ?? [] {
+            let wasOpen = pet.isIdleForPopover
+            if wasOpen { pet.popoverWindow?.orderOut(nil) }
+            pet.popoverWindow = nil
+            pet.terminalView = nil
+            pet.thinkingBubbleWindow = nil
+            guard wasOpen else { continue }
             pet.createPopoverWindow()
             if let session = pet.claudeSession, !session.history.isEmpty {
                 pet.terminalView?.replayHistory(session.history)
@@ -133,34 +165,121 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func switchDisplay(_ sender: NSMenuItem) {
-        let idx = sender.tag
-        controller?.pinnedScreenIndex = idx
+        controller?.setPinnedScreen(name: sender.representedObject as? String)
+    }
 
-        if let displayMenu = sender.menu {
-            for item in displayMenu.items {
-                item.state = item.tag == idx ? .on : .off
-            }
+    private func rebuildDisplayMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let pinned = controller?.pinnedScreenName
+        let autoItem = NSMenuItem(title: "Auto (Main Display)", action: #selector(switchDisplay(_:)), keyEquivalent: "")
+        autoItem.state = pinned == nil ? .on : .off
+        menu.addItem(autoItem)
+        menu.addItem(NSMenuItem.separator())
+        let connected = NSScreen.screens.map(\.localizedName)
+        for name in connected {
+            let item = NSMenuItem(title: name, action: #selector(switchDisplay(_:)), keyEquivalent: "")
+            item.representedObject = name
+            item.state = name == pinned ? .on : .off
+            menu.addItem(item)
+        }
+        if let pinned, !connected.contains(pinned) {
+            let missing = NSMenuItem(title: "\(pinned) (not connected)", action: nil, keyEquivalent: "")
+            missing.state = .on
+            menu.addItem(missing)
         }
     }
 
+    private func rebuildClaudeMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard let controller else { return }
+        let folder = NSMenuItem(title: "Folder: \(ClaudeSession.displayPath(controller.workingFolder))", action: nil, keyEquivalent: "")
+        folder.isEnabled = false
+        menu.addItem(folder)
+        menu.addItem(NSMenuItem(title: "Choose Folder…", action: #selector(chooseWorkingFolder), keyEquivalent: ""))
+        let home = NSMenuItem(title: "Use Home Folder", action: controller.hasCustomWorkingFolder ? #selector(useHomeFolder) : nil, keyEquivalent: "")
+        menu.addItem(home)
+        menu.addItem(NSMenuItem.separator())
+        let edits = NSMenuItem(title: "Allow Edits & Commands", action: #selector(toggleAllowEdits(_:)), keyEquivalent: "")
+        edits.state = controller.allowsEdits ? .on : .off
+        edits.toolTip = "Off: Claude can read and answer, but won't change files or run commands."
+        menu.addItem(edits)
+    }
+
+    @objc func chooseWorkingFolder() {
+        guard let controller else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Use Folder"
+        panel.message = "Claude will read, change and run things inside this folder."
+        panel.directoryURL = controller.workingFolder
+        NSApp.activate()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        controller.setWorkingFolder(url)
+    }
+
+    @objc func useHomeFolder() {
+        controller?.setWorkingFolder(nil)
+    }
+
+    @objc func toggleAllowEdits(_ sender: NSMenuItem) {
+        guard let controller else { return }
+        controller.setAllowsEdits(!controller.allowsEdits)
+    }
+
+    // MARK: - Launch at Login
+
+    @objc func toggleLaunchAtLogin(_ sender: NSMenuItem) {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled {
+                try service.unregister()
+            } else {
+                try service.register()
+            }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Couldn't change Launch at Login"
+            alert.informativeText = error.localizedDescription
+            NSApp.activate()
+            alert.runModal()
+        }
+        // macOS can ask the user to allow it in System Settings first.
+        if service.status == .requiresApproval {
+            SMAppService.openSystemSettingsLoginItems()
+        }
+        syncLaunchAtLoginItem()
+    }
+
+    private func syncLaunchAtLoginItem() {
+        launchAtLoginItem?.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
+
     @objc func togglePet(_ sender: NSMenuItem) {
-        guard let pet = controller?.pet else { return }
-        controller?.setPetVisible(!pet.window.isVisible)
-        syncPetMenuItem()
+        guard let pets = controller?.pets, pets.indices.contains(sender.tag) else { return }
+        let pet = pets[sender.tag]
+        controller?.setVisible(pet, !pet.window.isVisible)
+        syncPetMenuItems()
     }
 
-    @objc func renamePet() {
-        controller?.promptRename()
+    @objc func renamePet(_ sender: NSMenuItem) {
+        guard let pets = controller?.pets, pets.indices.contains(sender.tag) else { return }
+        controller?.promptRename(pets[sender.tag])
     }
 
-    private func syncPetMenuItem() {
-        guard let pet = controller?.pet else { return }
-        petVisibilityMenuItem?.title = "Show \(pet.name)"
-        petVisibilityMenuItem?.state = pet.window.isVisible ? .on : .off
+    private func syncPetMenuItems() {
+        for (i, pet) in (controller?.pets ?? []).enumerated() where i < petVisibilityItems.count {
+            petVisibilityItems[i].title = "Show \(pet.name)"
+            petVisibilityItems[i].state = pet.window.isVisible ? .on : .off
+            renameItems[i].title = "\(pet.name)…"
+        }
     }
 
     @objc func toggleSounds(_ sender: NSMenuItem) {
         WalkerCharacter.soundsEnabled.toggle()
+        UserDefaults.standard.set(WalkerCharacter.soundsEnabled, forKey: DefaultsKey.soundsEnabled)
         sender.state = WalkerCharacter.soundsEnabled ? .on : .off
     }
 
@@ -172,6 +291,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === statusItem?.menu else { return }
-        syncPetMenuItem()
+        syncPetMenuItems()
+        // Can also be changed in System Settings → General → Login Items.
+        syncLaunchAtLoginItem()
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu === displayMenu {
+            rebuildDisplayMenu(menu)
+        } else if menu === claudeMenu {
+            rebuildClaudeMenu(menu)
+        }
     }
 }
