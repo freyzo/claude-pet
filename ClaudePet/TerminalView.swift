@@ -246,7 +246,14 @@ class TerminalView: NSView, NSTextViewDelegate {
             systemSymbolName: busy ? "stop.circle.fill" : "arrow.up.circle.fill",
             accessibilityDescription: busy ? "Stop" : "Send"
         )
-        sendButton.toolTip = busy ? "Stop Claude" : nil
+        sendButton.toolTip = busy ? "Stop \(assistantName)" : nil
+    }
+
+    private var assistantName = "Claude"
+
+    func setAssistantName(_ name: String) {
+        assistantName = name
+        if isBusy { sendButton.toolTip = "Stop \(name)" }
     }
 
     /// Empties the transcript (New chat).

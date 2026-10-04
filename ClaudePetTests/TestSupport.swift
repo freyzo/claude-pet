@@ -120,11 +120,11 @@ final class FakeClaude {
     }
 }
 
-/// Counts callbacks from a ClaudeSession.
+/// Counts callbacks from a chat engine.
 final class SessionProbe {
     var texts: [String] = [], errors: [String] = [], notices: [String] = [], turns = 0
 
-    init(_ session: ClaudeSession) {
+    init(_ session: ChatEngine) {
         session.onText = { [unowned self] in texts.append($0) }
         session.onError = { [unowned self] in errors.append($0) }
         session.onNotice = { [unowned self] in notices.append($0) }

@@ -51,7 +51,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        controller?.pets.forEach { $0.claudeSession?.terminate() }
+        controller?.pets.forEach { $0.chatSession?.terminate() }
     }
 
     // MARK: - Menu Bar
@@ -134,8 +134,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(displayItem)
         self.displayMenu = displayMenu
 
-        // Claude submenu: where it works and what it may do. Rebuilt on open.
-        let claudeItem = NSMenuItem(title: "Claude", action: nil, keyEquivalent: "")
+        // Assistant submenu: which AI, where it works and what it may do. Rebuilt on open.
+        let claudeItem = NSMenuItem(title: "Assistant", action: nil, keyEquivalent: "")
         let claudeMenu = NSMenu()
         claudeMenu.delegate = self
         claudeItem.submenu = claudeMenu
@@ -185,7 +185,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             pet.thinkingBubbleWindow = nil
             guard wasOpen else { continue }
             pet.createPopoverWindow()
-            if let session = pet.claudeSession, !session.history.isEmpty {
+            if let session = pet.chatSession, !session.history.isEmpty {
                 pet.terminalView?.replayHistory(session.history)
             }
             pet.updatePopoverPosition()
@@ -225,6 +225,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func rebuildClaudeMenu(_ menu: NSMenu) {
         menu.removeAllItems()
         guard let controller else { return }
+        for option in AIProvider.allCases {
+            let item = NSMenuItem(title: option.menuTitle, action: #selector(switchProvider(_:)), keyEquivalent: "")
+            item.representedObject = option.rawValue
+            item.state = option == controller.provider ? .on : .off
+            menu.addItem(item)
+        }
+        menu.addItem(NSMenuItem.separator())
         let folder = NSMenuItem(title: "Folder: \(ClaudeSession.displayPath(controller.workingFolder))", action: nil, keyEquivalent: "")
         folder.isEnabled = false
         menu.addItem(folder)
@@ -234,8 +241,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
         let edits = NSMenuItem(title: "Allow Edits & Commands", action: #selector(toggleAllowEdits(_:)), keyEquivalent: "")
         edits.state = controller.allowsEdits ? .on : .off
-        edits.toolTip = "Off: Claude can read and answer, but won't change files or run commands."
+        edits.toolTip = "Off: \(controller.provider.assistantName) can read and answer, but won't change files or run commands."
         menu.addItem(edits)
+    }
+
+    @objc func switchProvider(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let provider = AIProvider(rawValue: raw) else { return }
+        controller?.setProvider(provider)
     }
 
     @objc func chooseWorkingFolder() {
@@ -246,7 +258,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
         panel.prompt = "Use Folder"
-        panel.message = "Claude will read, change and run things inside this folder."
+        panel.message = "\(controller.provider.assistantName) will read, change and run things inside this folder."
         panel.directoryURL = controller.workingFolder
         NSApp.activate()
         guard panel.runModal() == .OK, let url = panel.url else { return }

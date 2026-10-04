@@ -158,11 +158,13 @@ class WalkerCharacter {
     var isIdleForPopover = false
     var popoverWindow: NSWindow?
     var terminalView: TerminalView?
-    var claudeSession: ClaudeSession?
+    var chatSession: ChatEngine?
     var clickOutsideMonitor: Any?
     var escapeKeyMonitor: Any?
     weak var controller: ClaudePetController?
-    var isClaudeBusy: Bool { claudeSession?.isBusy ?? false }
+    var isChatBusy: Bool { chatSession?.isBusy ?? false }
+    var provider: AIProvider { chatSession?.provider ?? controller?.provider ?? .default }
+    var assistantName: String { provider.assistantName }
     var thinkingBubbleWindow: NSWindow?
     var popoverPinnedOrigin: NSPoint?
     private weak var popoverNameLabel: NSTextField?
@@ -382,14 +384,14 @@ class WalkerCharacter {
             createPopoverWindow()
         }
 
-        // Show static welcome message instead of Claude terminal
+        // Show static welcome message instead of the chat
         terminalView?.inputBar.isHidden = true
         let buddies = (controller?.pets ?? []).filter { $0 !== self }.map(\.name)
         let buddyLine = buddies.isEmpty ? "" : "my buddy \(buddies.joined(separator: " and ")) roams too, and each of us has our own chat.\n\n"
         terminalView?.appendNotice("""
         **aloha! i'm \(name), your naughty lil desktop pet.**
 
-        i roam around your screen. hover over me for a hi, click me anytime to chat with Claude.
+        i roam around your screen. hover over me for a hi, click me anytime to chat with \(assistantName).
 
         \(buddyLine)[give me a name](claudepet://rename) (or later: menu bar icon → Rename Pet)
 
@@ -433,23 +435,15 @@ class WalkerCharacter {
         showingCompletion = false
         hideBubble()
 
-        if claudeSession == nil {
-            let session = ClaudeSession()
-            if let controller {
-                session.workingDirectory = controller.workingFolder
-                session.allowsEdits = controller.allowsEdits
-            }
-            claudeSession = session
-            wireSession(session)
-        }
+        ensureChatSession()
         // No-op while running; otherwise reconnects (e.g. right after installing or logging in).
-        claudeSession?.start()
+        chatSession?.start()
 
         if popoverWindow == nil {
             createPopoverWindow()
         }
 
-        if let terminal = terminalView, let session = claudeSession, !session.history.isEmpty {
+        if let terminal = terminalView, let session = chatSession, !session.history.isEmpty {
             terminal.replayHistory(session.history)
         }
 
@@ -496,7 +490,7 @@ class WalkerCharacter {
             // Reset expiry so user gets the full 3s from now
             completionBubbleExpiry = CACurrentMediaTime() + 3.0
             showBubble(text: currentPhrase, isCompletion: true)
-        } else if isClaudeBusy {
+        } else if isChatBusy {
             // Force a fresh phrase pick and show immediately
             currentPhrase = ""
             lastPhraseUpdate = 0
@@ -530,9 +524,9 @@ class WalkerCharacter {
     }
 
     private func refreshPopoverStatus() {
-        terminalView?.setBusy(isClaudeBusy)
+        terminalView?.setBusy(isChatBusy)
         // Nothing to clear yet: a live-looking button that does nothing reads as broken.
-        let canStartNewChat = !(claudeSession?.history.isEmpty ?? true) || isClaudeBusy
+        let canStartNewChat = !(chatSession?.history.isEmpty ?? true) || isChatBusy
         newChatButton?.isEnabled = canStartNewChat
         newChatButton?.alphaValue = canStartNewChat ? 1 : 0.35
         guard let label = popoverStatusLabel else { return }
@@ -545,11 +539,11 @@ class WalkerCharacter {
 
     private func popoverStatus() -> (String, NSColor) {
         let t = resolvedTheme
-        if isClaudeBusy { return ("thinking…", t.accentColor) }
-        switch claudeSession?.status ?? .idle {
+        if isChatBusy { return ("thinking…", t.accentColor) }
+        switch chatSession?.status ?? .idle {
         case .offline(let reason): return ("offline · \(reason)", t.textDim)
         case .connecting: return ("connecting…", t.accentColor)
-        case .idle, .ready: return (t.titleString, t.successColor)
+        case .idle, .ready: return (t.statusTitle(for: provider), t.successColor)
         }
     }
 
@@ -560,15 +554,43 @@ class WalkerCharacter {
     }
 
     func startNewChat() {
-        claudeSession?.reset()
+        chatSession?.reset()
         terminalView?.clear()
         terminalView?.setBusy(false)
         refreshPopoverStatus()
     }
 
+    /// Creates the chat engine for the chosen provider the first time it's needed.
+    private func ensureChatSession() {
+        guard chatSession == nil else { return }
+        let session: ChatEngine = controller?.makeChatEngine() ?? ClaudeSession()
+        if let controller {
+            session.workingDirectory = controller.workingFolder
+            session.allowsEdits = controller.allowsEdits
+        }
+        chatSession = session
+        wireSession(session)
+    }
+
+    /// Replaces the chat with the newly chosen provider's engine.
+    func switchChatProvider(notice: String) {
+        chatSession?.terminate()
+        chatSession = nil
+        terminalView?.clear()
+        terminalView?.setBusy(false)
+        terminalView?.setAssistantName(assistantName)
+        if isIdleForPopover && !isOnboarding {
+            ensureChatSession()
+            chatSession?.start()
+            terminalView?.appendNotice(notice)
+        }
+        shownStatusText = nil
+        refreshPopoverStatus()
+    }
+
     /// Hands new folder / permission settings to a running chat; a session created later reads them itself.
     func applyClaudeSettings(newConversation: Bool, notice: String) {
-        guard let session = claudeSession, let controller else { return }
+        guard let session = chatSession, let controller else { return }
         session.workingDirectory = controller.workingFolder
         session.allowsEdits = controller.allowsEdits
         session.applySettings(newConversation: newConversation, notice: notice)
@@ -577,10 +599,9 @@ class WalkerCharacter {
 
     private func handleChatAction(_ action: String) {
         switch action {
-        case "login":
-            if !ClaudeSession.openLoginInTerminal() { terminalView?.appendError("Couldn't open Terminal.") }
-        case "install":
-            if !ClaudeSession.openInstallInTerminal() { terminalView?.appendError("Couldn't open Terminal.") }
+        case "login", "install":
+            ensureChatSession()
+            if chatSession?.perform(action: action) != true { terminalView?.appendError("Couldn't open Terminal.") }
         case "rename":
             controller?.promptRename(self)
         default:
@@ -703,12 +724,13 @@ class WalkerCharacter {
         terminal.autoresizingMask = [.width, .height]
         terminal.setPetAvatar(spriteImages.first, background: t.accentColor.withAlphaComponent(0.2))
         terminal.setPetName(name)
+        terminal.setAssistantName(assistantName)
         terminal.onSendMessage = { [weak self, weak terminal] message in
-            self?.claudeSession?.send(message: message)
-            terminal?.setBusy(self?.isClaudeBusy ?? false)
+            self?.chatSession?.send(message: message)
+            terminal?.setBusy(self?.isChatBusy ?? false)
         }
         terminal.onStop = { [weak self, weak terminal] in
-            self?.claudeSession?.stop()
+            self?.chatSession?.stop()
             terminal?.setBusy(false)
         }
         terminal.onAction = { [weak self] action in
@@ -726,7 +748,7 @@ class WalkerCharacter {
         refreshPopoverStatus()
     }
 
-    private func wireSession(_ session: ClaudeSession) {
+    private func wireSession(_ session: ChatEngine) {
         session.onText = { [weak self] text in
             self?.terminalView?.appendStreamingText(text)
         }
@@ -816,7 +838,7 @@ class WalkerCharacter {
             return
         }
 
-        if isClaudeBusy && !isIdleForPopover {
+        if isChatBusy && !isIdleForPopover {
             let oldPhrase = currentPhrase
             updateThinkingPhrase()
             if currentPhrase != oldPhrase && !oldPhrase.isEmpty && !phraseAnimating {
@@ -1014,7 +1036,7 @@ class WalkerCharacter {
     func handleMouseExited() {
         isHovered = false
         hoverReactionShown = false
-        if !isClaudeBusy && !showingCompletion {
+        if !isChatBusy && !showingCompletion {
             hideBubble()
         }
     }
@@ -1153,7 +1175,7 @@ class WalkerCharacter {
 
     private func blurt(_ phrases: [String], for duration: CFTimeInterval = 1.8) {
         // Never cover Claude's thinking/done bubbles or the onboarding greeting.
-        guard !isClaudeBusy, !isOnboarding, !showingCompletion || bubbleIsMischief else { return }
+        guard !isChatBusy, !isOnboarding, !showingCompletion || bubbleIsMischief else { return }
         currentPhrase = phrases.randomElement() ?? ""
         showingCompletion = true
         bubbleIsMischief = true
@@ -1209,7 +1231,7 @@ class WalkerCharacter {
 
     // MARK: - Frame Update
 
-    private var activeScreen: NSScreen? { controller?.activeScreen ?? NSScreen.main }
+    private var activeScreen: NSScreen? { controller?.activeScreen ?? NSScreen.screens.first }
 
     func update() {
         guard let screen = activeScreen else { return }

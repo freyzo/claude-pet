@@ -165,7 +165,7 @@ class CharacterContentView: NSView {
     override func accessibilityRole() -> NSAccessibility.Role? { .button }
     override func accessibilityLabel() -> String? { character?.name }
     override func accessibilityHelp() -> String? {
-        "Desktop pet. Press to chat with Claude. Drag to move. Right-click for options."
+        "Desktop pet. Press to chat with \(character?.assistantName ?? "your assistant"). Drag to move. Right-click for options."
     }
 
     override func accessibilityPerformPress() -> Bool {

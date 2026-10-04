@@ -266,7 +266,7 @@ class ClaudeSession {
         if FileManager.default.fileExists(atPath: workingDirectory.path, isDirectory: &isDirectory), isDirectory.boolValue {
             proc.currentDirectoryURL = workingDirectory
         } else {
-            notice("**Can't find the folder \(Self.displayPath(workingDirectory)),** so Claude is working in your home folder. Pick another one from the menu bar icon → Claude.")
+            notice("**Can't find the folder \(Self.displayPath(workingDirectory)),** so Claude is working in your home folder. Pick another one from the menu bar icon → Assistant.")
             proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
         }
 

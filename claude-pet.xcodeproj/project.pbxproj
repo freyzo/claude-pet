@@ -17,6 +17,11 @@
 		A10000010000000000000024 /* WalkerCharacter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000024 /* WalkerCharacter.swift */; };
 		A10000010000000000000025 /* ClaudePetController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000025 /* ClaudePetController.swift */; };
 		A10000010000000000000026 /* PetActivityMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000026 /* PetActivityMonitor.swift */; };
+		A10000010000000000000027 /* ChatEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000027 /* ChatEngine.swift */; };
+		A10000010000000000000028 /* CopilotSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000028 /* CopilotSession.swift */; };
+		A10000010000000000000107 /* CopilotSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000107 /* CopilotSessionTests.swift */; };
+		A10000010000000000000118 /* ChatEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000027 /* ChatEngine.swift */; };
+		A10000010000000000000119 /* CopilotSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000028 /* CopilotSession.swift */; };
 		A10000010000000000000030 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A1000000B000000000000002 /* Sparkle */; };
 		A10000010000000000000101 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000101 /* TestSupport.swift */; };
 		A10000010000000000000102 /* ClaudeSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000020000000000000102 /* ClaudeSessionTests.swift */; };
@@ -46,6 +51,9 @@
 		A10000020000000000000024 /* WalkerCharacter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalkerCharacter.swift; sourceTree = "<group>"; };
 		A10000020000000000000025 /* ClaudePetController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudePetController.swift; sourceTree = "<group>"; };
 		A10000020000000000000026 /* PetActivityMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PetActivityMonitor.swift; sourceTree = "<group>"; };
+		A10000020000000000000027 /* ChatEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatEngine.swift; sourceTree = "<group>"; };
+		A10000020000000000000028 /* CopilotSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotSession.swift; sourceTree = "<group>"; };
+		A10000020000000000000107 /* CopilotSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotSessionTests.swift; sourceTree = "<group>"; };
 		A10000030000000000000001 /* claude-pet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "claude-pet.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000030000000000000002 /* ClaudePetTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClaudePetTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000020000000000000101 /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
@@ -95,6 +103,8 @@
 				A10000020000000000000024 /* WalkerCharacter.swift */,
 				A10000020000000000000025 /* ClaudePetController.swift */,
 				A10000020000000000000026 /* PetActivityMonitor.swift */,
+				A10000020000000000000027 /* ChatEngine.swift */,
+				A10000020000000000000028 /* CopilotSession.swift */,
 				A10000020000000000000007 /* Assets.xcassets */,
 				A10000020000000000000010 /* Sounds */,
 				A10000020000000000000003 /* Info.plist */,
@@ -121,6 +131,7 @@
 				A10000020000000000000104 /* PetTests.swift */,
 				A10000020000000000000105 /* ActivityMonitorTests.swift */,
 				A10000020000000000000106 /* AlphaMaskTests.swift */,
+				A10000020000000000000107 /* CopilotSessionTests.swift */,
 			);
 			path = ClaudePetTests;
 			sourceTree = "<group>";
@@ -229,6 +240,8 @@
 				A10000010000000000000024 /* WalkerCharacter.swift in Sources */,
 				A10000010000000000000025 /* ClaudePetController.swift in Sources */,
 				A10000010000000000000026 /* PetActivityMonitor.swift in Sources */,
+				A10000010000000000000027 /* ChatEngine.swift in Sources */,
+				A10000010000000000000028 /* CopilotSession.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -242,6 +255,7 @@
 				A10000010000000000000104 /* PetTests.swift in Sources */,
 				A10000010000000000000105 /* ActivityMonitorTests.swift in Sources */,
 				A10000010000000000000106 /* AlphaMaskTests.swift in Sources */,
+				A10000010000000000000107 /* CopilotSessionTests.swift in Sources */,
 				A10000010000000000000111 /* PopoverTheme.swift in Sources */,
 				A10000010000000000000112 /* CharacterContentView.swift in Sources */,
 				A10000010000000000000113 /* ClaudeSession.swift in Sources */,
@@ -249,6 +263,8 @@
 				A10000010000000000000115 /* WalkerCharacter.swift in Sources */,
 				A10000010000000000000116 /* ClaudePetController.swift in Sources */,
 				A10000010000000000000117 /* PetActivityMonitor.swift in Sources */,
+				A10000010000000000000118 /* ChatEngine.swift in Sources */,
+				A10000010000000000000119 /* CopilotSession.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

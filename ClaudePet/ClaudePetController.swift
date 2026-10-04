@@ -17,6 +17,7 @@ enum DefaultsKey {
     static let workingFolder = "workingFolder"
     static let allowEdits = "allowEdits"
     static let petsPaused = "petsPaused"
+    static let provider = "aiProvider"
 }
 
 // One clock per pet: a pet's view link follows it across screens and idles while it's hidden.
@@ -172,6 +173,21 @@ class ClaudePetController {
 
     // MARK: - Claude Settings
 
+    var provider: AIProvider {
+        AIProvider(rawValue: UserDefaults.standard.string(forKey: DefaultsKey.provider) ?? "") ?? .default
+    }
+
+    func makeChatEngine() -> ChatEngine {
+        provider == .copilot ? CopilotSession() : ClaudeSession()
+    }
+
+    func setProvider(_ newProvider: AIProvider) {
+        guard newProvider != provider else { return }
+        UserDefaults.standard.set(newProvider.rawValue, forKey: DefaultsKey.provider)
+        Logger.app.info("Assistant: \(newProvider.rawValue, privacy: .public)")
+        pets.forEach { $0.switchChatProvider(notice: "**Now chatting with \(newProvider.menuTitle).** This is a fresh conversation.") }
+    }
+
     var workingFolder: URL {
         if let path = UserDefaults.standard.string(forKey: DefaultsKey.workingFolder) {
             return URL(fileURLWithPath: path, isDirectory: true)
@@ -206,8 +222,8 @@ class ClaudePetController {
         pets.forEach { $0.applyClaudeSettings(
             newConversation: false,
             notice: allowed
-                ? "**Edits & commands on.** Claude can change files and run commands in \(ClaudeSession.displayPath(workingFolder))."
-                : "**Edits & commands off.** Claude can still read and answer, but won't change files or run commands."
+                ? "**Edits & commands on.** \(provider.assistantName) can change files and run commands in \(ClaudeSession.displayPath(workingFolder))."
+                : "**Edits & commands off.** \(provider.assistantName) can still read and answer, but won't change files or run commands."
         ) }
     }
 

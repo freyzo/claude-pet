@@ -31,7 +31,7 @@ final class PetTests: XCTestCase {
 
         pet.isOnboarding = false
         let session = ClaudeSession()
-        pet.claudeSession = session
+        pet.chatSession = session
         pet.createPopoverWindow()
         XCTAssertEqual(newChatButton(pet)?.isEnabled, false, "nothing to clear yet")
 
@@ -76,7 +76,7 @@ final class PetTests: XCTestCase {
         XCTAssertFalse(pet.isWalking)
         XCTAssertTrue(pet.isPaused)
         pet.update()
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.screens.first else { return }
         let expectedY = screen.frame.minY + screen.frame.height * groundY
         XCTAssertEqual(pet.window.frame.origin.y, expectedY, accuracy: 0.5, "pet left hanging mid-hop")
     }
@@ -192,7 +192,7 @@ final class PetTests: XCTestCase {
         XCTAssertTrue(pet.isParked)
         XCTAssertTrue(pet.isWalking, "walks there")
         XCTAssertTrue(TestSupport.wait(8) { pet.update(); return !pet.isWalking })
-        guard let screen = NSScreen.main else { return }
+        guard let screen = NSScreen.screens.first else { return }
         XCTAssertEqual(pet.window.frame.maxX, screen.visibleFrame.maxX - 12, accuracy: 1)
         XCTAssertEqual(pet.window.frame.minY, screen.visibleFrame.minY, accuracy: 1)
 

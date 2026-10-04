@@ -197,4 +197,13 @@ struct PopoverTheme {
             bubbleFont: smallFont, bubbleCornerRadius: bubbleCornerRadius
         )
     }
+
+    /// The theme's header label ("CLAUDE", "claude ~", "Claude") styled for the active assistant.
+    func statusTitle(for provider: AIProvider) -> String {
+        let name = provider.assistantName
+        return titleString
+            .replacingOccurrences(of: "CLAUDE", with: name.uppercased())
+            .replacingOccurrences(of: "claude", with: name.lowercased())
+            .replacingOccurrences(of: "Claude", with: name)
+    }
 }
