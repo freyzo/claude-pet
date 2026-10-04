@@ -40,7 +40,7 @@ class PaddedTextFieldCell: NSTextFieldCell {
     }
 }
 
-class TerminalView: NSView {
+class TerminalView: NSView, NSTextViewDelegate {
     let scrollView = NSScrollView()
     let textView = NSTextView()
     let inputBar = NSView()
@@ -48,20 +48,23 @@ class TerminalView: NSView {
     private let sendButton = NSButton()
     private let emptyStateLabel = NSTextField(wrappingLabelWithString: "Ask me anything.\nI can read files, run commands and write code.")
     var onSendMessage: ((String) -> Void)?
+    var onAction: ((String) -> Void)?  // host of a clicked claudepet:// link
 
     private var currentAssistantText = ""
+    private let characterColor: NSColor?
 
-    override init(frame: NSRect) {
+    init(frame: NSRect, characterColor: NSColor?) {
+        self.characterColor = characterColor
         super.init(frame: frame)
         setupViews()
     }
 
     required init?(coder: NSCoder) {
+        characterColor = nil
         super.init(coder: coder)
         setupViews()
     }
 
-    var characterColor: NSColor?
     var theme: PopoverTheme {
         var t = PopoverTheme.current
         if let color = characterColor { t = t.withCharacterColor(color) }
@@ -105,6 +108,7 @@ class TerminalView: NSView {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.isAutomaticLinkDetectionEnabled = false
+        textView.delegate = self
         textView.linkTextAttributes = [
             .foregroundColor: t.accentColor,
             .underlineStyle: NSUnderlineStyle.single.rawValue
@@ -140,10 +144,6 @@ class TerminalView: NSView {
         paddedCell.textColor = t.textPrimary
         paddedCell.drawsBackground = false
         paddedCell.isBezeled = false
-        paddedCell.placeholderAttributedString = NSAttributedString(
-            string: "Ask Claude…",
-            attributes: [.font: t.font, .foregroundColor: t.textDim]
-        )
         inputField.cell = paddedCell
         inputField.target = self
         inputField.action = #selector(inputSubmitted)
@@ -263,6 +263,9 @@ class TerminalView: NSView {
                 textView.textStorage?.append(renderMarkdown(msg.text + "\n"))
             case .error:
                 appendError(msg.text)
+            case .notice:
+                ensureNewline()
+                textView.textStorage?.append(renderMarkdown(msg.text + "\n"))
             case .toolUse:
                 textView.textStorage?.append(NSAttributedString(string: "  \(msg.text)\n", attributes: [
                     .font: t.font, .foregroundColor: t.accentColor
@@ -280,6 +283,27 @@ class TerminalView: NSView {
     private func scrollToBottom() {
         emptyStateLabel.isHidden = (textView.textStorage?.length ?? 0) > 0
         textView.scrollToEndOfDocument(nil)
+    }
+
+    func appendNotice(_ markdown: String) {
+        ensureNewline()
+        textView.textStorage?.append(renderMarkdown(markdown + "\n"))
+        scrollToBottom()
+    }
+
+    func setPetName(_ name: String) {
+        let t = theme
+        (inputField.cell as? NSTextFieldCell)?.placeholderAttributedString = NSAttributedString(
+            string: "Ask \(name)…",
+            attributes: [.font: t.font, .foregroundColor: t.textDim]
+        )
+        inputField.needsDisplay = true
+    }
+
+    func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+        guard let url = link as? URL, url.scheme == "claudepet", let action = url.host else { return false }
+        onAction?(action)
+        return true
     }
 
     // MARK: - Markdown Rendering

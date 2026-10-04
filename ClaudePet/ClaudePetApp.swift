@@ -14,11 +14,12 @@ struct ClaudePetApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     var controller: ClaudePetController?
     var statusItem: NSStatusItem?
-    private weak var stitchVisibilityMenuItem: NSMenuItem?
-    private weak var claudeVisibilityMenuItem: NSMenuItem?
+    private weak var petVisibilityMenuItem: NSMenuItem?
     let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Writing to a Claude process that just died must be a recoverable error, not a crash.
+        signal(SIGPIPE, SIG_IGN)
         NSApp.setActivationPolicy(.accessory)
         controller = ClaudePetController()
         controller?.start()
@@ -26,7 +27,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        controller?.characters.forEach { $0.claudeSession?.terminate() }
+        controller?.pet?.claudeSession?.terminate()
     }
 
     // MARK: - Menu Bar
@@ -40,19 +41,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.delegate = self
 
-        let stitchItem = NSMenuItem(title: "Show Stitch", action: #selector(toggleCharacter(_:)), keyEquivalent: "1")
-        stitchItem.tag = 0
-        stitchItem.state = .on
-        menu.addItem(stitchItem)
-        stitchVisibilityMenuItem = stitchItem
+        let petItem = NSMenuItem(title: "Show Pet", action: #selector(togglePet(_:)), keyEquivalent: "1")
+        menu.addItem(petItem)
+        petVisibilityMenuItem = petItem
 
-        let claudeItem = NSMenuItem(title: "Show Claude", action: #selector(toggleCharacter(_:)), keyEquivalent: "2")
-        claudeItem.tag = 1
-        claudeItem.state = .on
-        menu.addItem(claudeItem)
-        claudeVisibilityMenuItem = claudeItem
+        menu.addItem(NSMenuItem(title: "Rename Pet…", action: #selector(renamePet), keyEquivalent: "r"))
 
-        controller?.syncVisibilityMenuItems(stitchItem: stitchItem, claudeItem: claudeItem)
+        syncPetMenuItem()
 
         menu.addItem(NSMenuItem.separator())
 
@@ -117,23 +112,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        controller?.characters.forEach { char in
-            let wasOpen = char.isIdleForPopover
-            if wasOpen { char.popoverWindow?.orderOut(nil) }
-            char.popoverWindow = nil
-            char.terminalView = nil
-            char.thinkingBubbleWindow = nil
-            if wasOpen {
-                char.createPopoverWindow()
-                if let session = char.claudeSession, !session.history.isEmpty {
-                    char.terminalView?.replayHistory(session.history)
-                }
-                char.updatePopoverPosition()
-                char.popoverWindow?.orderFrontRegardless()
-                char.popoverWindow?.makeKey()
-                if let terminal = char.terminalView {
-                    char.popoverWindow?.makeFirstResponder(terminal.inputField)
-                }
+        guard let pet = controller?.pet else { return }
+        let wasOpen = pet.isIdleForPopover
+        if wasOpen { pet.popoverWindow?.orderOut(nil) }
+        pet.popoverWindow = nil
+        pet.terminalView = nil
+        pet.thinkingBubbleWindow = nil
+        if wasOpen {
+            pet.createPopoverWindow()
+            if let session = pet.claudeSession, !session.history.isEmpty {
+                pet.terminalView?.replayHistory(session.history)
+            }
+            pet.updatePopoverPosition()
+            pet.popoverWindow?.orderFrontRegardless()
+            pet.popoverWindow?.makeKey()
+            if let terminal = pet.terminalView {
+                pet.popoverWindow?.makeFirstResponder(terminal.inputField)
             }
         }
     }
@@ -149,13 +143,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc func toggleCharacter(_ sender: NSMenuItem) {
-        let idx = sender.tag
-        guard let chars = controller?.characters, chars.indices.contains(idx) else { return }
-        let char = chars[idx]
-        let newVisible = !char.window.isVisible
-        controller?.setCharacterVisible(index: idx, visible: newVisible)
-        sender.state = newVisible ? .on : .off
+    @objc func togglePet(_ sender: NSMenuItem) {
+        guard let pet = controller?.pet else { return }
+        controller?.setPetVisible(!pet.window.isVisible)
+        syncPetMenuItem()
+    }
+
+    @objc func renamePet() {
+        controller?.promptRename()
+    }
+
+    private func syncPetMenuItem() {
+        guard let pet = controller?.pet else { return }
+        petVisibilityMenuItem?.title = "Show \(pet.name)"
+        petVisibilityMenuItem?.state = pet.window.isVisible ? .on : .off
     }
 
     @objc func toggleSounds(_ sender: NSMenuItem) {
@@ -171,9 +172,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === statusItem?.menu else { return }
-        controller?.syncVisibilityMenuItems(
-            stitchItem: stitchVisibilityMenuItem,
-            claudeItem: claudeVisibilityMenuItem
-        )
+        syncPetMenuItem()
     }
 }

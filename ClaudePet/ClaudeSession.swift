@@ -1,110 +1,211 @@
-import Foundation
+import AppKit
 
 class ClaudeSession {
+    enum Status: Equatable {
+        case idle
+        case connecting
+        case ready
+        case offline(String)  // short reason shown in the chat header
+    }
+
     private var process: Process?
     private var inputPipe: Pipe?
     private var lineBuffer = ""
     private(set) var isRunning = false
     private(set) var isBusy = false  // true between send() and result
+    private(set) var status: Status = .idle
+    private var isStarting = false
+    private var needsLogin = false
+    private var pendingMessages: [String] = []
     private static var claudePath: String?
     private static var shellEnvironment: [String: String]?
 
     var onText: ((String) -> Void)?
     var onError: ((String) -> Void)?
+    var onNotice: ((String) -> Void)?                     // markdown; may hold claudepet:// action links
     var onToolUse: ((String, String) -> Void)?            // toolName, summary
     var onToolResult: ((String, Bool) -> Void)?           // summary, isError
     var onTurnComplete: (() -> Void)?
-    var onProcessExit: (() -> Void)?
 
     struct Message {
-        enum Role { case user, assistant, error, toolUse, toolResult }
+        enum Role { case user, assistant, error, notice, toolUse, toolResult }
         let role: Role
         let text: String
     }
     var history: [Message] = []
 
-    // MARK: - Process Lifecycle
+    private static let notInstalledNotice = """
+    **Claude Code isn't installed, so I'm offline.** I'll keep roaming around!
+    To chat: [install Claude Code](claudepet://install) (opens Terminal), then send your message again.
+    Or download it from https://claude.ai/download
+    """
+    private static let notLoggedInNotice = """
+    **You're not logged in to Claude Code, so I'm offline.**
+    [Log in](claudepet://login) (opens Terminal, just follow the steps), then send your message again.
+    """
+    private static let noConnectionNotice = "**Can't reach Claude right now.** Check your internet connection, then send your message again."
+    private static let stoppedNotice = "**Claude stopped.** Send a message to start it again."
+
+    // MARK: - Finding Claude
 
     static func resolveClaudePath(completion: @escaping (String?) -> Void) {
-        if let cached = claudePath, shellEnvironment != nil {
+        if let cached = claudePath, shellEnvironment != nil,
+           FileManager.default.isExecutableFile(atPath: cached) {
             completion(cached)
             return
         }
-        // Always capture the user's login shell environment first.
-        // This is critical: Xcode's process environment has a minimal PATH that won't
-        // include ~/.local/bin, /opt/homebrew/bin, nvm paths, etc.
+        // GUI apps get a bare PATH, so ask the user's own shell where things are installed.
+        captureLoginShellEnvironment { env in
+            if let env { shellEnvironment = env }
+            let shellCandidates = (shellEnvironment?["PATH"] ?? "").split(separator: ":").map { "\($0)/claude" }
+            claudePath = (shellCandidates + fallbackPaths()).first { FileManager.default.isExecutableFile(atPath: $0) }
+            completion(claudePath)
+        }
+    }
+
+    private static func fallbackPaths() -> [String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        var paths = [
+            "\(home)/.local/bin/claude",
+            "\(home)/.claude/local/claude",
+            "\(home)/.claude/local/bin/claude",
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+            "\(home)/.npm-global/bin/claude",
+            "\(home)/.bun/bin/claude",
+            "\(home)/.volta/bin/claude",
+            "\(home)/Library/pnpm/claude"
+        ]
+        // nvm keeps one bin dir per Node version; prefer the newest.
+        let nvmRoot = "\(home)/.nvm/versions/node"
+        let versions = (try? FileManager.default.contentsOfDirectory(atPath: nvmRoot)) ?? []
+        paths += versions
+            .sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+            .map { "\(nvmRoot)/\($0)/bin/claude" }
+        return paths
+    }
+
+    private static let envStart = "__CLAUDE_PET_ENV_START__"
+    private static let envEnd = "__CLAUDE_PET_ENV_END__"
+
+    private static func captureLoginShellEnvironment(completion: @escaping ([String: String]?) -> Void) {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        // Use -i (interactive) AND -l (login) to ensure .zshrc and .zprofile are both loaded
-        proc.arguments = ["-l", "-i", "-c", "echo '---ENV_START---' && env && echo '---ENV_END---'"]
+        proc.executableURL = URL(fileURLWithPath: loginShellPath())
+        // -l -i loads the same profile/rc files Terminal does (Homebrew, nvm, PATH tweaks).
+        proc.arguments = ["-l", "-i", "-c", "echo \(envStart); /usr/bin/env; echo \(envEnd)"]
+        // No stdin: rc files that ask questions get EOF instead of hanging forever.
+        proc.standardInput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
         let pipe = Pipe()
         proc.standardOutput = pipe
-        proc.standardError = Pipe()
-        proc.terminationHandler = { _ in
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8) ?? ""
+
+        var finished = false
+        let finish: ([String: String]?) -> Void = { env in
             DispatchQueue.main.async {
-                // Parse shell environment
-                if let startRange = output.range(of: "---ENV_START---\n"),
-                   let endRange = output.range(of: "\n---ENV_END---") {
-                    let envString = String(output[startRange.upperBound..<endRange.lowerBound])
-                    var env: [String: String] = [:]
-                    for line in envString.components(separatedBy: "\n") {
-                        if let eqRange = line.range(of: "=") {
-                            let key = String(line[line.startIndex..<eqRange.lowerBound])
-                            let value = String(line[eqRange.upperBound...])
-                            env[key] = value
-                        }
-                    }
-                    shellEnvironment = env
-                }
-
-                // Check if claude is in the captured shell PATH
-                if let shellPath = shellEnvironment?["PATH"] {
-                    for dir in shellPath.components(separatedBy: ":") {
-                        let candidate = "\(dir)/claude"
-                        if FileManager.default.isExecutableFile(atPath: candidate) {
-                            claudePath = candidate
-                            completion(candidate)
-                            return
-                        }
-                    }
-                }
-
-                completeWithFallbackPath(completion)
+                guard !finished else { return }
+                finished = true
+                pipe.fileHandleForReading.readabilityHandler = nil
+                if proc.isRunning { proc.terminate() }
+                completion(env)
             }
         }
-        do { try proc.run() } catch {
-            // If shell fails entirely, still try fallback paths
-            completeWithFallbackPath(completion)
+
+        var output = Data()
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            output.append(chunk)
+            let text = String(decoding: output, as: UTF8.self)
+            if chunk.isEmpty || text.contains(envEnd) {
+                handle.readabilityHandler = nil
+                finish(parseEnvironment(text))
+            }
         }
+
+        do {
+            try proc.run()
+        } catch {
+            finish(nil)
+            return
+        }
+        // A broken shell config must not block chat; fall back to known install paths.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { finish(nil) }
     }
 
-    private static let fallbackPaths: [String] = {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return [
-            "\(home)/.local/bin/claude",
-            "\(home)/.claude/local/bin/claude",
-            "/usr/local/bin/claude",
-            "/opt/homebrew/bin/claude"
-        ]
-    }()
-
-    private static func completeWithFallbackPath(_ completion: (String?) -> Void) {
-        let fallback = fallbackPaths.first { FileManager.default.isExecutableFile(atPath: $0) }
-        if let fallback { claudePath = fallback }
-        completion(fallback)
+    private static func parseEnvironment(_ output: String) -> [String: String]? {
+        guard let start = output.range(of: envStart + "\n"),
+              let end = output.range(of: "\n" + envEnd, range: start.upperBound..<output.endIndex) else { return nil }
+        var env: [String: String] = [:]
+        for line in output[start.upperBound..<end.lowerBound].split(separator: "\n") {
+            guard let eq = line.firstIndex(of: "=") else { continue }
+            env[String(line[..<eq])] = String(line[line.index(after: eq)...])
+        }
+        return env.isEmpty ? nil : env
     }
+
+    private static func loginShellPath() -> String {
+        if let entry = getpwuid(getuid()), let shell = entry.pointee.pw_shell {
+            let path = String(cString: shell)
+            if FileManager.default.isExecutableFile(atPath: path) { return path }
+        }
+        return "/bin/zsh"
+    }
+
+    // MARK: - Terminal Helpers
+
+    @discardableResult
+    static func openLoginInTerminal() -> Bool {
+        runInTerminal(
+            name: "login",
+            command: shellQuote(claudePath ?? "claude"),
+            banner: "Log in to Claude Code when asked (if it doesn't ask, type /login and press Enter). When you're done, close this window and send your message again."
+        )
+    }
+
+    @discardableResult
+    static func openInstallInTerminal() -> Bool {
+        runInTerminal(
+            name: "install",
+            command: "curl -fsSL https://claude.ai/install.sh | bash",
+            banner: "Installing Claude Code. When it finishes, close this window and send your message again."
+        )
+    }
+
+    private static func runInTerminal(name: String, command: String, banner: String) -> Bool {
+        let script = """
+        #!/bin/sh
+        clear
+        echo \(shellQuote(banner))
+        echo
+        exec "${SHELL:-/bin/zsh}" -l -i -c \(shellQuote(command))
+        """
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("claude-pet-\(name).command")
+        do {
+            try script.write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+        } catch {
+            return false
+        }
+        return NSWorkspace.shared.open(url)
+    }
+
+    private static func shellQuote(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    // MARK: - Session Lifecycle
 
     func start() {
+        guard !isRunning, !isStarting else { return }
+        isStarting = true
+        status = .connecting
         ClaudeSession.resolveClaudePath { [weak self] path in
-            guard let self = self, let claudePath = path else {
-                let msg = "Claude CLI not found.\n\nTo install, run this in Terminal:\n  curl -fsSL https://claude.ai/install.sh | sh\n\nOr download from https://claude.ai/download"
-                self?.onError?(msg)
-                self?.history.append(Message(role: .error, text: msg))
+            guard let self else { return }
+            self.isStarting = false
+            guard let path else {
+                self.goOffline("Claude Code not installed", notice: Self.notInstalledNotice)
                 return
             }
-            self.launchProcess(claudePath: claudePath)
+            self.launchProcess(claudePath: path)
         }
     }
 
@@ -126,13 +227,16 @@ class ClaudeSession {
         // Ensure PATH always includes common locations even if shell capture failed
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let essentialPaths = [
+            // npm/nvm installs need `node`, which lives next to `claude`.
+            URL(fileURLWithPath: claudePath).deletingLastPathComponent().path,
             "\(home)/.local/bin",
             "\(home)/.local/share/claude/versions",
             "/usr/local/bin",
             "/opt/homebrew/bin"
         ]
         let currentPath = env["PATH"] ?? "/usr/bin:/bin"
-        let missingPaths = essentialPaths.filter { !currentPath.contains($0) }
+        let currentDirs = Set(currentPath.split(separator: ":").map(String.init))
+        let missingPaths = essentialPaths.filter { !currentDirs.contains($0) }
         if !missingPaths.isEmpty {
             env["PATH"] = (missingPaths + [currentPath]).joined(separator: ":")
         }
@@ -146,11 +250,14 @@ class ClaudeSession {
         proc.standardOutput = outPipe
         proc.standardError = errPipe
 
-        proc.terminationHandler = { [weak self] _ in
+        proc.terminationHandler = { [weak self] exited in
             DispatchQueue.main.async {
-                self?.isRunning = false
-                self?.isBusy = false
-                self?.onProcessExit?()
+                guard let self, self.process === exited else { return }
+                let unexpected = self.isRunning
+                self.isRunning = false
+                self.isBusy = false
+                // Exits we caused (terminate / login restart) are already explained in the chat.
+                if unexpected { self.goOffline("stopped", notice: Self.stoppedNotice) }
             }
         }
 
@@ -170,7 +277,7 @@ class ClaudeSession {
             guard !data.isEmpty else { handle.readabilityHandler = nil; return }
             if let text = String(data: data, encoding: .utf8) {
                 DispatchQueue.main.async {
-                    self?.onError?(text)
+                    self?.handleStderr(text)
                 }
             }
         }
@@ -180,18 +287,31 @@ class ClaudeSession {
             process = proc
             inputPipe = inPipe
             isRunning = true
+            status = needsLogin ? .offline("not logged in") : .ready
+            let queued = pendingMessages
+            pendingMessages.removeAll()
+            queued.forEach(write)
         } catch {
-            let msg = "Failed to launch Claude CLI.\n\nMake sure Claude Code is installed and up to date:\n  curl -fsSL https://claude.ai/install.sh | sh\n\nError: \(error.localizedDescription)"
-            onError?(msg)
-            history.append(Message(role: .error, text: msg))
+            goOffline("couldn't start", notice: """
+            **Couldn't start Claude Code, so I'm offline.** (\(error.localizedDescription))
+            [Reinstall Claude Code](claudepet://install), then send your message again.
+            """)
         }
     }
 
     func send(message: String) {
-        guard isRunning, let pipe = inputPipe else { return }
-        isBusy = true
         history.append(Message(role: .user, text: message))
+        isBusy = true
+        guard isRunning else {
+            // Starts on demand: first message, after a crash, or after logging in.
+            pendingMessages.append(message)
+            start()
+            return
+        }
+        write(message)
+    }
 
+    private func write(_ message: String) {
         let payload: [String: Any] = [
             "type": "user",
             "message": [
@@ -199,15 +319,65 @@ class ClaudeSession {
                 "content": message
             ]
         ]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let jsonStr = String(data: data, encoding: .utf8) else { return }
-        let line = jsonStr + "\n"
-        pipe.fileHandleForWriting.write(line.data(using: .utf8)!)
+        guard let pipe = inputPipe, var data = try? JSONSerialization.data(withJSONObject: payload) else {
+            isBusy = false
+            return
+        }
+        data.append(0x0A)
+        do {
+            try pipe.fileHandleForWriting.write(contentsOf: data)
+        } catch {
+            terminate()
+            goOffline("stopped", notice: Self.stoppedNotice)
+        }
     }
 
     func terminate() {
-        process?.terminate()
         isRunning = false
+        process?.terminate()
+    }
+
+    private func goOffline(_ reason: String, notice text: String) {
+        status = .offline(reason)
+        isBusy = false
+        pendingMessages.removeAll()
+        notice(text)
+    }
+
+    private func notice(_ text: String) {
+        guard history.last?.text != text else { return }
+        history.append(Message(role: .notice, text: text))
+        onNotice?(text)
+    }
+
+    private func reportLoginProblem() {
+        needsLogin = true
+        // New credentials are only picked up by a fresh process.
+        terminate()
+        goOffline("not logged in", notice: Self.notLoggedInNotice)
+    }
+
+    private func handleStderr(_ text: String) {
+        if Self.isLoginProblem(text, isError: true) {
+            reportLoginProblem()
+        } else {
+            onError?(text)
+        }
+    }
+
+    private static func isLoginProblem(_ text: String, isError: Bool) -> Bool {
+        let lower = text.lowercased()
+        if lower.contains("please run /login") { return true }
+        guard isError else { return false }
+        return ["invalid api key", "not logged in", "oauth token", "authentication_error", "unauthorized"]
+            .contains { lower.contains($0) }
+    }
+
+    private static func isConnectionProblem(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return ["connection error", "network", "enotfound", "econnrefused", "econnreset", "etimedout",
+                "fetch failed", "getaddrinfo", "unable to connect", "socket hang up"]
+            .contains { lower.contains($0) }
     }
 
     // MARK: - NDJSON Parsing
@@ -230,6 +400,17 @@ class ClaudeSession {
         let type = json["type"] as? String ?? ""
 
         switch type {
+        case "system":
+            // The CLI silently retries failed API calls for minutes; bail out early on the hopeless ones.
+            guard json["subtype"] as? String == "api_retry" else { break }
+            let httpStatus = json["error_status"] as? Int
+            if httpStatus == 401 || json["error"] as? String == "authentication_failed" {
+                reportLoginProblem()
+            } else if httpStatus == nil, (json["attempt"] as? Int ?? 0) >= 3 {
+                terminate()
+                goOffline("no internet", notice: Self.noConnectionNotice)
+            }
+
         case "assistant":
             if let message = json["message"] as? [String: Any],
                let content = message["content"] as? [[String: Any]] {
@@ -278,8 +459,18 @@ class ClaudeSession {
 
         case "result":
             isBusy = false
-            if let result = json["result"] as? String, !result.isEmpty {
-                history.append(Message(role: .assistant, text: result))
+            let result = json["result"] as? String ?? ""
+            let isError = json["is_error"] as? Bool ?? false
+            if Self.isLoginProblem(result, isError: isError) {
+                reportLoginProblem()
+            } else if isError && Self.isConnectionProblem(result) {
+                goOffline("no internet", notice: Self.noConnectionNotice)
+            } else {
+                needsLogin = false
+                status = .ready
+                if !result.isEmpty {
+                    history.append(Message(role: .assistant, text: result))
+                }
             }
             onTurnComplete?()
 

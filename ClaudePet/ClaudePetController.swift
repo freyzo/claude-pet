@@ -1,67 +1,46 @@
 import AppKit
 
 class ClaudePetController {
-    var characters: [WalkerCharacter] = []
+    private(set) var pet: WalkerCharacter?
     private var displayLink: CVDisplayLink?
     var pinnedScreenIndex: Int = -1
     private static let onboardingKey = "hasCompletedOnboarding"
-    static let stitchVisibleKey = "petVisibleStitch"
-    static let claudeVisibleKey = "petVisibleClaude"
+    private static let petVisibleKey = "petVisible"
+    private static let petNameKey = "petName"
+    private static let defaultPetName = "Stitch"
+    private static let maxNameLength = 24
 
     func start() {
-        // Guard against accidental double-start creating duplicate pets.
-        if !characters.isEmpty { return }
+        // Guard against accidental double-start creating a duplicate pet.
+        if pet != nil { return }
 
-        UserDefaults.standard.register(defaults: [
-            Self.stitchVisibleKey: true,
-            Self.claudeVisibleKey: true
-        ])
+        UserDefaults.standard.register(defaults: [Self.petVisibleKey: true])
 
-        // Pet 1 / characters[0]: Stitch (`stitch_*` sprites)
-        let stitch = WalkerCharacter(
+        let pet = WalkerCharacter(
             spriteIdleName: "stitch_idle",
             spriteWalk1Name: "stitch_walk1",
             spriteWalk2Name: "stitch_walk2"
         )
+        pet.displayHeight = 160
+        pet.accelStart = 0.5
+        pet.fullSpeedStart = 1.0
+        pet.decelStart = 7.5
+        pet.walkStop = 8.0
+        pet.videoDuration = 8.75
+        pet.characterColor = NSColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1.0)
+        pet.naughtiness = 1.0
+        pet.name = UserDefaults.standard.string(forKey: Self.petNameKey) ?? Self.defaultPetName
+        pet.positionX = 0.35
+        pet.positionY = 0.3
+        pet.pauseEndTime = CACurrentMediaTime() + Double.random(in: 0.5...1.5)
+        pet.setup()
+        pet.controller = self
+        self.pet = pet
 
-        stitch.displayHeight = 160
-        stitch.accelStart = 0.5
-        stitch.fullSpeedStart = 1.0
-        stitch.decelStart = 7.5
-        stitch.walkStop = 8.0
-        stitch.videoDuration = 8.75
-        stitch.characterColor = NSColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1.0)
-        stitch.naughtiness = 1.0
-        stitch.name = "Stitch"
-        stitch.positionX = 0.35
-        stitch.positionY = 0.3
-        stitch.pauseEndTime = CACurrentMediaTime() + Double.random(in: 0.5...1.5)
-        stitch.setup()
-
-        // Pet 2 / characters[1]: Claude (`claude_*` sprites)
-        let claude = WalkerCharacter(
-            spriteIdleName: "claude_idle",
-            spriteWalk1Name: "claude_walk1",
-            spriteWalk2Name: "claude_walk2"
-        )
-
-        claude.displayHeight = 160
-        claude.accelStart = 0.5
-        claude.fullSpeedStart = 1.0
-        claude.decelStart = 7.5
-        claude.walkStop = 8.0
-        claude.videoDuration = 8.75
-        claude.characterColor = NSColor(red: 1.0, green: 0.42, blue: 0.0, alpha: 1.0)
-        claude.naughtiness = 0.4
-        claude.positionX = 0.62
-        claude.positionY = 0.28
-        claude.pauseEndTime = CACurrentMediaTime() + Double.random(in: 0.8...2.2)
-        claude.setup()
-
-        characters = [stitch, claude]
-        characters.forEach { $0.controller = self }
-
-        applySavedCharacterVisibility()
+        if !UserDefaults.standard.bool(forKey: Self.petVisibleKey) {
+            pet.window.orderOut(nil)
+            pet.pauseSpriteForMenuHide()
+        }
 
         startDisplayLink()
 
@@ -70,55 +49,56 @@ class ClaudePetController {
         }
     }
 
-    /// Call after menu loads so checkmarks match windows.
-    func syncVisibilityMenuItems(stitchItem: NSMenuItem?, claudeItem: NSMenuItem?) {
-        guard characters.count >= 2 else { return }
-        stitchItem?.state = characters[0].window.isVisible ? .on : .off
-        claudeItem?.state = characters[1].window.isVisible ? .on : .off
-    }
-
-    func setCharacterVisible(index: Int, visible: Bool) {
-        guard characters.indices.contains(index) else { return }
-        let char = characters[index]
+    func setPetVisible(_ visible: Bool) {
+        guard let pet else { return }
         if visible {
-            char.window.orderFrontRegardless()
+            pet.window.orderFrontRegardless()
         } else {
-            if char.isIdleForPopover { char.closePopover() }
-            char.window.orderOut(nil)
-            char.pauseSpriteForMenuHide()
+            if pet.isIdleForPopover { pet.closePopover() }
+            pet.window.orderOut(nil)
+            pet.pauseSpriteForMenuHide()
         }
-        let key = index == 0 ? Self.stitchVisibleKey : Self.claudeVisibleKey
-        UserDefaults.standard.set(visible, forKey: key)
+        UserDefaults.standard.set(visible, forKey: Self.petVisibleKey)
     }
 
-    private func applySavedCharacterVisibility() {
-        guard characters.count >= 2 else { return }
-        if !UserDefaults.standard.bool(forKey: Self.stitchVisibleKey) {
-            characters[0].window.orderOut(nil)
-            characters[0].pauseSpriteForMenuHide()
-        }
-        if !UserDefaults.standard.bool(forKey: Self.claudeVisibleKey) {
-            characters[1].window.orderOut(nil)
-            characters[1].pauseSpriteForMenuHide()
-        }
+    func promptRename() {
+        guard let pet else { return }
+        let alert = NSAlert()
+        alert.messageText = "Name your pet"
+        alert.informativeText = "Pick any name. It shows in the chat and in the menu."
+        let field = NSTextField(string: pet.name)
+        field.placeholderString = Self.defaultPetName
+        field.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        // Blank resets to the default; long names would overflow the chat header.
+        let trimmed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = trimmed.isEmpty ? Self.defaultPetName : String(trimmed.prefix(Self.maxNameLength))
+        UserDefaults.standard.set(name, forKey: Self.petNameKey)
+        pet.rename(to: name)
     }
 
     private func triggerOnboarding() {
-        guard let stitch = characters.first else { return }
-        stitch.isOnboarding = true
+        guard let pet else { return }
+        pet.isOnboarding = true
         // Show greeting after a short delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            stitch.currentPhrase = "aloha!"
-            stitch.showingCompletion = true
-            stitch.completionBubbleExpiry = CACurrentMediaTime() + 600
-            stitch.showBubble(text: "aloha!", isCompletion: true)
-            stitch.playCompletionSound()
+            pet.currentPhrase = "aloha!"
+            pet.showingCompletion = true
+            pet.completionBubbleExpiry = CACurrentMediaTime() + 600
+            pet.showBubble(text: "aloha!", isCompletion: true)
+            pet.playCompletionSound()
         }
     }
 
     func completeOnboarding() {
         UserDefaults.standard.set(true, forKey: Self.onboardingKey)
-        characters.forEach { $0.isOnboarding = false }
+        pet?.isOnboarding = false
     }
 
     // MARK: - Display Link
@@ -148,24 +128,8 @@ class ClaudePetController {
     }
 
     func tick() {
-        let activeChars = characters.filter { $0.window.isVisible }
-
-        let now = CACurrentMediaTime()
-        let anyWalking = activeChars.contains { $0.isWalking }
-        for char in activeChars {
-            if char.isIdleForPopover { continue }
-            if char.isPaused && now >= char.pauseEndTime && anyWalking {
-                char.pauseEndTime = now + Double.random(in: 5.0...10.0)
-            }
-        }
-        for char in activeChars {
-            char.update()
-        }
-
-        let sorted = activeChars.sorted { $0.positionX < $1.positionX }
-        for (i, char) in sorted.enumerated() {
-            char.window.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + i)
-        }
+        guard let pet, pet.window.isVisible else { return }
+        pet.update()
     }
 
     deinit {

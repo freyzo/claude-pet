@@ -61,7 +61,7 @@ class WalkerCharacter {
     var decelStart: CFTimeInterval = 7.5
     var walkStop: CFTimeInterval = 8.25
     var characterColor: NSColor = .gray
-    var name = "Claude"
+    var name = "Stitch"
 
     // Walk state - now 2D across entire screen
     var walkStartTime: CFTimeInterval = 0
@@ -115,9 +115,10 @@ class WalkerCharacter {
     var isClaudeBusy: Bool { claudeSession?.isBusy ?? false }
     var thinkingBubbleWindow: NSWindow?
     var popoverPinnedOrigin: NSPoint?
+    private weak var popoverNameLabel: NSTextField?
     private weak var popoverStatusLabel: NSTextField?
     private weak var popoverStatusDot: NSView?
-    private var shownBusyState: Bool?
+    private var shownStatusText: String?
 
     init(
         spriteIdleName: String,
@@ -296,16 +297,15 @@ class WalkerCharacter {
 
         // Show static welcome message instead of Claude terminal
         terminalView?.inputBar.isHidden = true
-        let welcome = """
-        aloha! i'm stitch — your naughty lil desktop pet! claude is roaming too.
+        terminalView?.appendNotice("""
+        **aloha! i'm \(name), your naughty lil desktop pet.**
 
-        i'll wander the screen randomly. hover for hi! click either of us for Claude chat (each pet has its own chat).
+        i roam around your screen. hover over me for a hi, click me anytime to chat with Claude.
 
-        menu bar (top right): Show Stitch / Show Claude if you only want one visible, plus themes and sounds.
+        [give me a name](claudepet://rename) (or later: menu bar icon → Rename Pet…)
 
-        click outside to dismiss, then click me again to start chatting!
-        """
-        terminalView?.appendStreamingText(welcome)
+        click outside to close, then click me again to start chatting!
+        """)
 
         updatePopoverPosition()
         fadeInPopover()
@@ -335,13 +335,6 @@ class WalkerCharacter {
     }
 
     func openPopover() {
-        // Close any other open popover
-        if let siblings = controller?.characters {
-            for sibling in siblings where sibling !== self && sibling.isIdleForPopover {
-                sibling.closePopover()
-            }
-        }
-
         isIdleForPopover = true
         isWalking = false
         isPaused = true
@@ -355,8 +348,9 @@ class WalkerCharacter {
             let session = ClaudeSession()
             claudeSession = session
             wireSession(session)
-            session.start()
         }
+        // No-op while running; otherwise reconnects (e.g. right after installing or logging in).
+        claudeSession?.start()
 
         if popoverWindow == nil {
             createPopoverWindow()
@@ -443,11 +437,41 @@ class WalkerCharacter {
     }
 
     private func refreshPopoverStatus() {
-        guard let label = popoverStatusLabel, shownBusyState != isClaudeBusy else { return }
-        shownBusyState = isClaudeBusy
+        guard let label = popoverStatusLabel else { return }
+        let (text, color) = popoverStatus()
+        guard text != shownStatusText else { return }
+        shownStatusText = text
+        label.stringValue = text
+        popoverStatusDot?.layer?.backgroundColor = color.cgColor
+    }
+
+    private func popoverStatus() -> (String, NSColor) {
         let t = resolvedTheme
-        label.stringValue = isClaudeBusy ? "thinking…" : t.titleString
-        popoverStatusDot?.layer?.backgroundColor = (isClaudeBusy ? t.accentColor : t.successColor).cgColor
+        if isClaudeBusy { return ("thinking…", t.accentColor) }
+        switch claudeSession?.status ?? .idle {
+        case .offline(let reason): return ("offline · \(reason)", t.textDim)
+        case .connecting: return ("connecting…", t.accentColor)
+        case .idle, .ready: return (t.titleString, t.successColor)
+        }
+    }
+
+    func rename(to newName: String) {
+        name = newName
+        popoverNameLabel?.stringValue = newName
+        terminalView?.setPetName(newName)
+    }
+
+    private func handleChatAction(_ action: String) {
+        switch action {
+        case "login":
+            if !ClaudeSession.openLoginInTerminal() { terminalView?.appendError("Couldn't open Terminal.") }
+        case "install":
+            if !ClaudeSession.openInstallInTerminal() { terminalView?.appendError("Couldn't open Terminal.") }
+        case "rename":
+            controller?.promptRename()
+        default:
+            break
+        }
     }
 
     var resolvedTheme: PopoverTheme {
@@ -546,20 +570,27 @@ class WalkerCharacter {
         sep.autoresizingMask = [.width, .minYMargin]
         container.addSubview(sep)
 
-        let terminal = TerminalView(frame: NSRect(x: 0, y: 0, width: popoverWidth, height: popoverHeight - headerHeight - 1))
-        terminal.characterColor = characterColor
+        let terminal = TerminalView(
+            frame: NSRect(x: 0, y: 0, width: popoverWidth, height: popoverHeight - headerHeight - 1),
+            characterColor: characterColor
+        )
         terminal.autoresizingMask = [.width, .height]
+        terminal.setPetName(name)
         terminal.onSendMessage = { [weak self] message in
             self?.claudeSession?.send(message: message)
+        }
+        terminal.onAction = { [weak self] action in
+            self?.handleChatAction(action)
         }
         container.addSubview(terminal)
 
         win.contentView = container
         popoverWindow = win
         terminalView = terminal
+        popoverNameLabel = nameLabel
         popoverStatusLabel = statusLabel
         popoverStatusDot = statusDot
-        shownBusyState = nil
+        shownStatusText = nil
         refreshPopoverStatus()
     }
 
@@ -577,16 +608,16 @@ class WalkerCharacter {
             self?.terminalView?.appendError(text)
         }
 
+        session.onNotice = { [weak self] text in
+            self?.terminalView?.appendNotice(text)
+        }
+
         session.onToolUse = { [weak self] toolName, summary in
             self?.terminalView?.appendToolUse(toolName: toolName, summary: summary)
         }
 
         session.onToolResult = { [weak self] summary, isError in
             self?.terminalView?.appendToolResult(summary: summary, isError: isError)
-        }
-
-        session.onProcessExit = { [weak self] in
-            self?.terminalView?.appendError("Claude session ended.")
         }
     }
 

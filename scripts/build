@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Regenerate the claude_* pixel-art PNGs (transparent BG) + Xcode build.
-# stitch_* sprites are hand-drawn art; never generate them here.
+# Debug build with Xcode.
 # Usage:
-#   ./scripts/build           # sprites + build
-#   ./scripts/build --open    # same, then launch the app
+#   ./scripts/build           # build
+#   ./scripts/build --open    # build, then launch the app
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -21,119 +20,6 @@ for arg in "$@"; do
 done
 
 echo "==> Regenerating claude_* sprites (RGBA, transparent background)"
-python3 << 'PY'
-import struct, zlib
-from pathlib import Path
-
-W = 64
-SKIN = (255, 136, 102, 255)
-BLK = (0, 0, 0, 255)
-
-def clear_buf():
-    return bytearray(W * W * 4)
-
-
-def fill_rect(buf, x, y, rw, rh, rgba):
-    r, g, b, a = rgba
-    for j in range(y, min(y + rh, W)):
-        for i in range(x, min(x + rw, W)):
-            o = (j * W + i) * 4
-            buf[o : o + 4] = bytes([r, g, b, a])
-
-def draw_body(buf):
-    # Body
-    fill_rect(buf, 16, 24, 32, 24, SKIN)
-    # Arms (static in all frames)
-    fill_rect(buf, 8, 28, 8, 8, SKIN)    # left
-    fill_rect(buf, 48, 28, 8, 8, SKIN)   # right
-
-def draw_eyes(buf, eye_y=30):
-    fill_rect(buf, 24, eye_y, 4, 4, BLK)
-    fill_rect(buf, 36, eye_y, 4, 4, BLK)
-
-def draw_legs_idle(buf):
-    fill_rect(buf, 20, 48, 6, 8, SKIN)
-    fill_rect(buf, 38, 48, 6, 8, SKIN)
-
-def draw_legs_walk1(buf):
-    # Left leg up, right leg down
-    fill_rect(buf, 20, 46, 6, 6, SKIN)
-    fill_rect(buf, 38, 50, 6, 8, SKIN)
-
-def draw_legs_walk2(buf):
-    # Right leg up, left leg down
-    fill_rect(buf, 38, 46, 6, 6, SKIN)
-    fill_rect(buf, 20, 50, 6, 8, SKIN)
-
-def frame_idle():
-    buf = clear_buf()
-    draw_body(buf)
-    draw_eyes(buf)
-    draw_legs_idle(buf)
-    return buf
-
-def frame_walk1():
-    buf = clear_buf()
-    # slight body raise to match earlier cycle
-    fill_rect(buf, 16, 26, 32, 24, SKIN)
-    fill_rect(buf, 8, 30, 8, 8, SKIN)
-    fill_rect(buf, 48, 30, 8, 8, SKIN)
-    draw_legs_walk1(buf)
-    draw_eyes(buf, eye_y=32)
-    return buf
-
-def frame_walk2():
-    buf = clear_buf()
-    fill_rect(buf, 16, 26, 32, 24, SKIN)
-    fill_rect(buf, 8, 30, 8, 8, SKIN)
-    fill_rect(buf, 48, 30, 8, 8, SKIN)
-    draw_legs_walk2(buf)
-    draw_eyes(buf, eye_y=32)
-    return buf
-
-def upscale2(buf):
-    buf2 = bytearray(128 * 128 * 4)
-    for y in range(128):
-        for x in range(128):
-            sx, sy = x // 2, y // 2
-            s = (sy * W + sx) * 4
-            d = (y * 128 + x) * 4
-            buf2[d : d + 4] = buf[s : s + 4]
-    return buf2
-
-
-def write_png(path, w, h, buf):
-    def chunk(tag, data):
-        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
-        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
-
-    ihdr = struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)
-    raw = b"".join(b"\x00" + bytes(buf[i : i + w * 4]) for i in range(0, w * h * 4, w * 4))
-    comp = zlib.compress(raw, 9)
-    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", comp) + chunk(b"IEND", b"")
-    Path(path).write_bytes(png)
-
-
-base = Path("ClaudePet/Assets.xcassets")
-for name, fb in [
-    ("claude_idle", frame_idle),
-    ("claude_walk1", frame_walk1),
-    ("claude_walk2", frame_walk2),
-]:
-    d = base / f"{name}.imageset"
-    d.mkdir(parents=True, exist_ok=True)
-    write_png(d / f"{name}@2x.png", 128, 128, upscale2(fb()))
-    contents = d / "Contents.json"
-    if not contents.exists():
-        contents.write_text(
-            '{"images":[{"filename":"%s@2x.png","idiom":"universal","scale":"2x"}],"info":{"author":"xcode","version":1}}'
-            % name,
-            encoding="utf-8",
-        )
-print("    wrote claude_* (@2x)")
-PY
-
-DERIVED="${ROOT}/.derivedData"
 
 echo "==> xcodebuild (scheme DoggoAgent, Debug)"
 xcodebuild \
