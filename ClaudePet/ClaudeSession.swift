@@ -20,7 +20,8 @@ class ClaudeSession {
     private var needsLogin = false
     private var pendingMessages: [String] = []
     private static var claudePath: String?
-    private static var shellEnvironment: [String: String]?
+    /// The user's login-shell environment (PATH etc.), shared with the Copilot engine.
+    private(set) static var shellEnvironment: [String: String]?
 
     // Conversation continuity: a restarted process picks up the same chat via --resume.
     private(set) var sessionId: String?
@@ -111,6 +112,15 @@ class ClaudeSession {
     private static let envStart = "__CLAUDE_PET_ENV_START__"
     private static let envEnd = "__CLAUDE_PET_ENV_END__"
 
+    /// Captures the login-shell environment once; later calls reuse it.
+    static func loadShellEnvironment(completion: @escaping () -> Void) {
+        if shellEnvironment != nil { completion(); return }
+        captureLoginShellEnvironment { env in
+            if let env { shellEnvironment = env }
+            completion()
+        }
+    }
+
     private static func captureLoginShellEnvironment(completion: @escaping ([String: String]?) -> Void) {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: loginShellPath())
@@ -193,7 +203,7 @@ class ClaudeSession {
         )
     }
 
-    private static func runInTerminal(name: String, command: String, banner: String) -> Bool {
+    static func runInTerminal(name: String, command: String, banner: String) -> Bool {
         let script = """
         #!/bin/sh
         clear
@@ -211,7 +221,7 @@ class ClaudeSession {
         return NSWorkspace.shared.open(url)
     }
 
-    private static func shellQuote(_ text: String) -> String {
+    static func shellQuote(_ text: String) -> String {
         "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 

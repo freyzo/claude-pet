@@ -18,6 +18,8 @@ final class PetTests: XCTestCase {
         let pet = TestSupport.makePet()
         pet.isPaused = true
         pet.pauseEndTime = 0
+        // The real mouse is system-wide; clicks made while tests run must not count.
+        pet.mouseButtonsDown = { false }
         return pet
     }
 
@@ -123,5 +125,91 @@ final class PetTests: XCTestCase {
         XCTAssertTrue(pet.isIdleForPopover)
         pet.openChatFromMenu()
         XCTAssertTrue(pet.isIdleForPopover, "second menu pick must not close the chat")
+    }
+
+    // MARK: - Staying out of the way
+
+    private func run(_ pet: WalkerCharacter, for seconds: Double) {
+        let end = Date().addingTimeInterval(seconds)
+        while Date() < end {
+            pet.update()
+            TestSupport.spin(1.0 / 30)
+        }
+    }
+
+    private func body(_ pet: WalkerCharacter) -> NSRect {
+        pet.window.frame.insetBy(dx: 160 * 0.18, dy: 160 * 0.12)
+    }
+
+    /// A calm pet (won't wander on its own) with the cursor parked on its belly.
+    private func petUnderCursor() -> (WalkerCharacter, NSPoint) {
+        let pet = roamingPet()
+        pet.isCalm = true
+        pet.cursorLocation = { NSPoint(x: -99_999, y: -99_999) }
+        pet.update()
+        let cursor = NSPoint(x: pet.window.frame.midX, y: pet.window.frame.midY)
+        pet.cursorLocation = { cursor }
+        return (pet, cursor)
+    }
+
+    func testPetMovesOutFromUnderARestingCursorAfterASecond() {
+        let (pet, cursor) = petUnderCursor()
+        run(pet, for: 0.6)
+        XCTAssertFalse(pet.isWalking, "too early: you may still be about to click it")
+        run(pet, for: 0.7)
+        XCTAssertTrue(pet.isWalking, "should be getting out of the way")
+        XCTAssertTrue(TestSupport.wait(6) { pet.update(); return !pet.isWalking })
+        XCTAssertFalse(body(pet).contains(cursor), "pet ended up under the cursor again")
+        run(pet, for: 1.5)
+        XCTAssertFalse(body(pet).contains(cursor))
+    }
+
+    func testNoDodgeWhileMouseButtonIsHeld() {
+        let (pet, _) = petUnderCursor()
+        pet.mouseButtonsDown = { true }
+        run(pet, for: 1.5)
+        XCTAssertFalse(pet.isWalking)
+    }
+
+    func testDroppedPetStaysWhereYouPutItUntilCursorLeaves() {
+        let (pet, cursor) = petUnderCursor()
+        pet.isBeingDragged = true
+        pet.finishDrag()
+        run(pet, for: 1.5)
+        XCTAssertFalse(pet.isWalking, "just dropped there on purpose")
+        pet.cursorLocation = { NSPoint(x: -99_999, y: -99_999) }
+        run(pet, for: 0.1)
+        pet.cursorLocation = { cursor }
+        run(pet, for: 1.3)
+        XCTAssertTrue(pet.isWalking, "cursor came back and rested: now it moves")
+    }
+
+    func testCornerPetWalksToCornerStaysAndDodgesToTheOtherCorner() {
+        let pet = roamingPet()
+        pet.cursorLocation = { NSPoint(x: -99_999, y: -99_999) }
+        pet.update()
+        pet.goToCorner(onRight: true)
+        XCTAssertTrue(pet.isParked)
+        XCTAssertTrue(pet.isWalking, "walks there")
+        XCTAssertTrue(TestSupport.wait(8) { pet.update(); return !pet.isWalking })
+        guard let screen = NSScreen.main else { return }
+        XCTAssertEqual(pet.window.frame.maxX, screen.visibleFrame.maxX - 12, accuracy: 1)
+        XCTAssertEqual(pet.window.frame.minY, screen.visibleFrame.minY, accuracy: 1)
+
+        pet.pauseEndTime = 0
+        run(pet, for: 1.0)
+        XCTAssertFalse(pet.isWalking, "a parked pet never wanders off")
+
+        let cursor = NSPoint(x: pet.window.frame.midX, y: pet.window.frame.midY)
+        pet.cursorLocation = { cursor }
+        run(pet, for: 1.3)
+        XCTAssertTrue(pet.isWalking)
+        XCTAssertFalse(pet.parkedOnRight, "moves to the other corner")
+        XCTAssertTrue(pet.isParked)
+        XCTAssertTrue(TestSupport.wait(10) { pet.update(); return !pet.isWalking })
+        XCTAssertEqual(pet.window.frame.minX, screen.visibleFrame.minX + 12, accuracy: 1)
+
+        pet.leaveCorner()
+        XCTAssertFalse(pet.isParked)
     }
 }

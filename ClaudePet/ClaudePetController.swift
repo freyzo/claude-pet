@@ -9,6 +9,8 @@ enum DefaultsKey {
     static let petName = "petName"
     static let claudeVisible = "petVisibleClaude"
     static let claudeName = "petNameClaude"
+    static let stitchCorner = "petCornerStitch"  // "left" / "right"; absent = roaming
+    static let claudeCorner = "petCornerClaude"
     static let theme = "theme"
     static let soundsEnabled = "soundsEnabled"
     static let display = "display"
@@ -42,6 +44,7 @@ private struct PetSpec {
     let defaultName: String
     let nameKey: String
     let visibleKey: String
+    let cornerKey: String
     let color: NSColor
     let naughtiness: Double
     let phrases: PetPhrases
@@ -59,9 +62,11 @@ class ClaudePetController {
     private static let maxNameLength = 24
     private static let specs = [
         PetSpec(sprite: "stitch", defaultName: "Stitch", nameKey: DefaultsKey.petName, visibleKey: DefaultsKey.petVisible,
+                cornerKey: DefaultsKey.stitchCorner,
                 color: NSColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1.0), naughtiness: 1.0, phrases: .stitch,
                 start: CGPoint(x: 0.35, y: 0.3), firstPause: 0.5...1.5),
         PetSpec(sprite: "claude", defaultName: "Claude", nameKey: DefaultsKey.claudeName, visibleKey: DefaultsKey.claudeVisible,
+                cornerKey: DefaultsKey.claudeCorner,
                 color: NSColor(red: 1.0, green: 0.42, blue: 0.0, alpha: 1.0), naughtiness: 0.4, phrases: .robot,
                 start: CGPoint(x: 0.62, y: 0.28), firstPause: 0.8...2.2)
     ]
@@ -94,6 +99,10 @@ class ClaudePetController {
             pet.pauseEndTime = CACurrentMediaTime() + Double.random(in: spec.firstPause)
             pet.setup()
             pet.controller = self
+            pet.cornerSlot = pets.count
+            if let side = UserDefaults.standard.string(forKey: spec.cornerKey) {
+                pet.goToCorner(onRight: side == "right", animated: false)
+            }
             pets.append(pet)
 
             if !UserDefaults.standard.bool(forKey: spec.visibleKey) {
@@ -124,6 +133,19 @@ class ClaudePetController {
     func setPetsPaused(_ paused: Bool) {
         UserDefaults.standard.set(paused, forKey: DefaultsKey.petsPaused)
         activity?.userPaused = paused
+    }
+
+    func setParked(_ pet: WalkerCharacter, _ parked: Bool) {
+        if parked { pet.goToCorner() } else { pet.leaveCorner() }
+        petPlacementChanged(pet)
+    }
+
+    /// Saves which corner (if any) a pet is parked in.
+    func petPlacementChanged(_ pet: WalkerCharacter) {
+        guard let spec = spec(for: pet) else { return }
+        let side: String? = pet.isParked ? (pet.parkedOnRight ? "right" : "left") : nil
+        UserDefaults.standard.set(side, forKey: spec.cornerKey)
+        Logger.app.info("\(spec.defaultName, privacy: .public) \(side.map { "parked \($0)" } ?? "roaming", privacy: .public)")
     }
 
     private func spec(for pet: WalkerCharacter) -> PetSpec? {

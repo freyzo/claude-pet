@@ -19,6 +19,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var petVisibilityItems: [NSMenuItem] = []
     private var renameItems: [NSMenuItem] = []
     private var chatItems: [NSMenuItem] = []
+    private var cornerItems: [NSMenuItem] = []
     private weak var pauseItem: NSMenuItem?
     private weak var restingInfoItem: NSMenuItem?
     private weak var displayMenu: NSMenu?
@@ -88,6 +89,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             renameItems.append(item)
         }
         menu.addItem(renameItem)
+
+        for i in (controller?.pets ?? []).indices {
+            let item = NSMenuItem(title: "Corner", action: #selector(toggleCorner(_:)), keyEquivalent: "")
+            item.tag = i
+            item.toolTip = "Sends the pet to a bottom corner of the screen. It stays there until you uncheck this."
+            menu.addItem(item)
+            cornerItems.append(item)
+        }
 
         let pause = NSMenuItem(title: "Pause Pets", action: #selector(togglePausePets(_:)), keyEquivalent: "p")
         menu.addItem(pause)
@@ -302,6 +311,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         pet.openChatFromMenu()
     }
 
+    @objc func toggleCorner(_ sender: NSMenuItem) {
+        guard let controller, controller.pets.indices.contains(sender.tag) else { return }
+        let pet = controller.pets[sender.tag]
+        if !pet.isParked && !pet.window.isVisible { controller.setVisible(pet, true) }
+        controller.setParked(pet, !pet.isParked)
+        syncPetMenuItems()
+    }
+
     @objc func togglePausePets(_ sender: NSMenuItem) {
         guard let activity = controller?.activity else { return }
         controller?.setPetsPaused(!activity.userPaused)
@@ -314,6 +331,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             petVisibilityItems[i].state = pet.window.isVisible ? .on : .off
             renameItems[i].title = "\(pet.name)…"
             chatItems[i].title = "Chat with \(pet.name)"
+            cornerItems[i].title = "Keep \(pet.name) in Corner"
+            cornerItems[i].state = pet.isParked ? .on : .off
         }
         let activity = controller?.activity
         pauseItem?.state = activity?.userPaused == true ? .on : .off

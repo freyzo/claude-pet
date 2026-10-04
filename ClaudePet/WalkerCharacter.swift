@@ -40,7 +40,7 @@ class ActionButton: NSButton {
 
 /// What a pet blurts while playing; each character has its own voice.
 struct PetPhrases {
-    var hover, zoomies, sneak, hop, wiggle, chase, flee, caught: [String]
+    var hover, zoomies, sneak, hop, wiggle, chase, flee, caught, dodge, corner: [String]
 
     static let stitch = PetPhrases(
         hover: ["hi!", "hey!", "aloha!", "oh hi!", "what's up?", "hehe", "boop!", "*waves*", "yo!", "heya!",
@@ -51,7 +51,9 @@ struct PetPhrases {
         wiggle: ["hehehe", "meega nala kweesta!", "*mischief*", "naga!", "ih ih ih!"],
         chase: ["gaba!", "gonna get you!", "*chases*"],
         flee: ["nope!", "can't catch me!", "hehehe!", "nyeh!", "ha!"],
-        caught: ["boop!", "gotcha!", "tag, you're it!"]
+        caught: ["boop!", "gotcha!", "tag, you're it!"],
+        dodge: ["oops, sorry!", "out of your way!", "*scoots*", "my bad!"],
+        corner: ["ok ok, going!", "to my corner...", "fine, i'll sit over there"]
     )
 
     static let robot = PetPhrases(
@@ -62,7 +64,9 @@ struct PetPhrases {
         wiggle: ["*happy beeps*", "bzzt bzzt!", "dance.exe", "*rattles*"],
         chase: ["target acquired!", "tracking cursor...", "*chases*"],
         flee: ["evasive maneuvers!", "nope.exe", "abort abort!", "can't catch me!"],
-        caught: ["boop!", "target reached!", "tag, you're it!"]
+        caught: ["boop!", "target reached!", "tag, you're it!"],
+        dodge: ["rerouting...", "clearing your path", "*beep* sorry!", "moving aside"],
+        corner: ["returning to dock", "parking mode", "heading to corner"]
     )
 }
 
@@ -107,7 +111,7 @@ class WalkerCharacter {
 
     // 0 = calm stroller, 1 = full Stitch chaos
     var naughtiness: Double = 0.5
-    private enum Antic { case stroll, zoomies, sneak, hop, wiggle, chase, flee }
+    private enum Antic { case stroll, zoomies, sneak, hop, wiggle, chase, flee, travel }
     private var antic: Antic = .stroll
     private var walkDuration: CFTimeInterval = 10.0
     private var hopCount = 0
@@ -136,6 +140,19 @@ class WalkerCharacter {
     var lastHoverSoundTime: CFTimeInterval = 0
     var hoverReactionShown = false
     var phrases = PetPhrases.stitch
+
+    // Parked in a bottom corner until told to roam again.
+    private(set) var isParked = false
+    private(set) var parkedOnRight = true
+    var cornerSlot = 0  // side-by-side spot when pets share a corner
+    private var travelTarget = CGPoint.zero
+
+    // A resting cursor on the pet means "you're in my way"; the pet moves after this long.
+    static let dodgeDelay: CFTimeInterval = 1.0
+    private var cursorRestStart: CFTimeInterval?
+    private var dodgeWaitsForCursorToLeave = false
+    var cursorLocation: () -> NSPoint = { NSEvent.mouseLocation }
+    var mouseButtonsDown: () -> Bool = { NSEvent.pressedMouseButtons != 0 }
 
     // Popover state
     var isIdleForPopover = false
@@ -315,6 +332,12 @@ class WalkerCharacter {
         }
         // The cursor is still on the pet after a drop; that's not "cursor approached", so no flee.
         cursorWasNear = true
+        // You put it there on purpose: no dodging until the cursor has moved off it once.
+        dodgeWaitsForCursorToLeave = true
+        if isParked {
+            isParked = false
+            controller?.petPlacementChanged(self)
+        }
         enterPause()
     }
 
@@ -1039,7 +1062,8 @@ class WalkerCharacter {
             walkEndY = walkStartY
             blurt(phrases.wiggle)
         case .chase:
-            let target = cursorTarget() ?? CGPoint(x: walkStartX, y: walkStartY)
+            // Stop beside the cursor, never on top of it.
+            let target = spotBesideCursor(gap: 50) ?? CGPoint(x: walkStartX, y: walkStartY)
             walkEndX = target.x
             walkEndY = target.y
             goingRight = walkEndX >= walkStartX
@@ -1047,7 +1071,7 @@ class WalkerCharacter {
             walkFrameInterval = 0.15
             blurt(phrases.chase, for: 1.2)
         case .flee:
-            let cursor = NSEvent.mouseLocation
+            let cursor = cursorLocation()
             goingRight = cursor.x < window.frame.midX
             if (goingRight && walkStartX > 0.8) || (!goingRight && walkStartX < 0.2) { goingRight.toggle() }
             walkDuration = .random(in: 1.2...1.8)
@@ -1059,6 +1083,12 @@ class WalkerCharacter {
             let dy = CGFloat.random(in: 0.05...0.15) * (cursor.y < window.frame.midY ? 1 : -1)
             walkEndY = min(max(walkStartY + dy, 0.05), 0.7)
             blurt(phrases.flee)
+        case .travel:
+            walkEndX = travelTarget.x
+            walkEndY = travelTarget.y
+            goingRight = walkEndX >= walkStartX
+            walkDuration = max(1.0, Double(hypot(walkEndX - walkStartX, walkEndY - walkStartY)) * 4.5)
+            walkFrameInterval = 0.15
         }
 
         updateFlip()
@@ -1074,7 +1104,7 @@ class WalkerCharacter {
             (.hop, 0.5 + 1.5 * n),
             (.wiggle, 1.5 * n)
         ]
-        if cursorTarget() != nil { options.append((.chase, n)) }
+        if spotBesideCursor(gap: 50) != nil { options.append((.chase, n)) }
         var roll = Double.random(in: 0..<options.reduce(0) { $0 + $1.1 })
         for (option, weight) in options {
             if roll < weight { return option }
@@ -1100,18 +1130,22 @@ class WalkerCharacter {
         }
     }
 
-    // Normalized position that puts the pet under the cursor, if the cursor is on the pet's screen.
-    private func cursorTarget() -> CGPoint? {
+    /// Normalized spot just left or right of the cursor (the side the pet is on), clear of it.
+    private func spotBesideCursor(gap: CGFloat) -> CGPoint? {
         guard let frame = activeScreen?.frame else { return nil }
-        let cursor = NSEvent.mouseLocation
+        let cursor = cursorLocation()
         guard frame.contains(cursor) else { return nil }
-        let x = (cursor.x - displayWidth / 2 - frame.minX) / max(frame.width - displayWidth, 1)
+        let span = max(frame.width - displayWidth, 1)
+        let leftSide = (cursor.x - gap - displayWidth - frame.minX) / span
+        let rightSide = (cursor.x + gap - frame.minX) / span
+        let petIsLeft = window.frame.midX < cursor.x
+        guard let x = (petIsLeft ? [leftSide, rightSide] : [rightSide, leftSide]).first(where: { (0...1).contains($0) }) else { return nil }
         let y = (cursor.y - displayHeight / 2 - frame.minY) / frame.height
-        return CGPoint(x: min(max(x, 0.05), 0.95), y: min(max(y, 0.05), 0.7))
+        return CGPoint(x: x, y: min(max(y, 0.05), 0.7))
     }
 
     private func cursorJustCameNear() -> Bool {
-        let cursor = NSEvent.mouseLocation
+        let cursor = cursorLocation()
         let near = hypot(cursor.x - window.frame.midX, cursor.y - window.frame.midY) < 170
         defer { cursorWasNear = near }
         return near && !cursorWasNear
@@ -1202,7 +1236,12 @@ class WalkerCharacter {
 
         let now = CACurrentMediaTime()
 
-        if cursorArrived, !isOnboarding, !isCalm, now >= fleeCooldownEnd,
+        if !isOnboarding, !(isWalking && (antic == .travel || antic == .flee)), cursorRestsOnPet(now: now) {
+            cursorRestStart = nil
+            dodge()
+        }
+
+        if cursorArrived, !isOnboarding, !isCalm, !isParked, now >= fleeCooldownEnd,
            !isWalking || antic == .stroll || antic == .sneak,
            Double.random(in: 0..<1) < 0.45 * naughtiness {
             fleeCooldownEnd = now + 12
@@ -1210,7 +1249,7 @@ class WalkerCharacter {
         }
 
         if isPaused {
-            if now >= pauseEndTime && !isCalm {
+            if now >= pauseEndTime && !isCalm && !isParked {
                 startWalk()
             } else {
                 placeWindow(in: screenFrame)
@@ -1259,5 +1298,73 @@ class WalkerCharacter {
         let x = screenFrame.minX + (screenFrame.width - displayWidth) * positionX
         let y = screenFrame.minY + screenFrame.height * positionY + lift
         window.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
+    // MARK: - Staying Out of the Way
+
+    /// True once the cursor has rested on the pet's body (no button held) for `dodgeDelay`.
+    private func cursorRestsOnPet(now: CFTimeInterval) -> Bool {
+        let body = window.frame.insetBy(dx: displayWidth * 0.18, dy: displayHeight * 0.12)
+        guard body.contains(cursorLocation()), !mouseButtonsDown() else {
+            cursorRestStart = nil
+            dodgeWaitsForCursorToLeave = false
+            return false
+        }
+        guard !dodgeWaitsForCursorToLeave else { return false }
+        if cursorRestStart == nil { cursorRestStart = now }
+        return now - (cursorRestStart ?? now) >= Self.dodgeDelay
+    }
+
+    private func dodge() {
+        if isParked {
+            parkedOnRight.toggle()
+            controller?.petPlacementChanged(self)
+            travel(to: cornerPoint(), saying: phrases.dodge)
+            return
+        }
+        let beside = spotBesideCursor(gap: 70).map { CGPoint(x: $0.x, y: positionY) }
+        let shifted = CGPoint(x: positionX, y: min(max(positionY + (positionY > 0.4 ? -0.25 : 0.25), 0.05), 0.7))
+        travel(to: beside ?? shifted, saying: phrases.dodge)
+    }
+
+    private func travel(to target: CGPoint, saying lines: [String]) {
+        travelTarget = target
+        startWalk(.travel)
+        blurt(lines)
+    }
+
+    /// Normalized spot in the parked bottom corner, just above the Dock.
+    private func cornerPoint() -> CGPoint {
+        guard let screen = activeScreen else { return CGPoint(x: positionX, y: positionY) }
+        let frame = screen.frame, visible = screen.visibleFrame
+        let span = max(frame.width - displayWidth, 1)
+        let margin: CGFloat = 12
+        let offset = CGFloat(cornerSlot) * (displayWidth + 4)
+        let left = parkedOnRight ? visible.maxX - margin - displayWidth - offset : visible.minX + margin + offset
+        return CGPoint(x: min(max((left - frame.minX) / span, 0), 1),
+                       y: max((visible.minY - frame.minY) / frame.height, 0))
+    }
+
+    /// Walks to the nearest bottom corner (or the given side) and stays there.
+    func goToCorner(onRight: Bool? = nil, animated: Bool = true) {
+        isParked = true
+        if let onRight {
+            parkedOnRight = onRight
+        } else if let screen = activeScreen {
+            parkedOnRight = window.frame.midX >= screen.frame.midX
+        }
+        let target = cornerPoint()
+        if animated && !isIdleForPopover && !isBeingDragged {
+            travel(to: target, saying: phrases.corner)
+        } else {
+            positionX = target.x
+            positionY = target.y
+            if isWalking { enterPause() }
+        }
+    }
+
+    func leaveCorner() {
+        isParked = false
+        pauseEndTime = CACurrentMediaTime() + 0.8
     }
 }
