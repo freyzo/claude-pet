@@ -26,7 +26,7 @@ Without Claude Code the pet still works; the chat shows **offline** with a one-c
 
 ## Quick Start
 
-1. Go to [Releases](https://github.com/freyzo/stitchAgent/releases)
+1. Go to [Releases](https://github.com/freyzo/claude-pet/releases)
 2. Download the latest `.dmg`
 3. Open the DMG and move `claude-pet` to `Applications`
 4. Launch `claude-pet` from `Applications`

@@ -37,6 +37,34 @@ class ActionButton: NSButton {
     @objc private func fire() { onClick?() }
 }
 
+/// What a pet blurts while playing; each character has its own voice.
+struct PetPhrases {
+    var hover, zoomies, sneak, hop, wiggle, chase, flee, caught: [String]
+
+    static let stitch = PetPhrases(
+        hover: ["hi!", "hey!", "aloha!", "oh hi!", "what's up?", "hehe", "boop!", "*waves*", "yo!", "heya!",
+                "meega nala kweesta!", "ohana!", ":3"],
+        zoomies: ["wheee!", "zoom zoom!", "nyoom!", "can't stop!", "hehehe!"],
+        sneak: ["shhh...", "*sneaks*", "tiptoe...", "nobody saw that"],
+        hop: ["boing!", "hup hup!", "ih!", "*bounces*"],
+        wiggle: ["hehehe", "meega nala kweesta!", "*mischief*", "naga!", "ih ih ih!"],
+        chase: ["gaba!", "gonna get you!", "*chases*"],
+        flee: ["nope!", "can't catch me!", "hehehe!", "nyeh!", "ha!"],
+        caught: ["boop!", "gotcha!", "tag, you're it!"]
+    )
+
+    static let robot = PetPhrases(
+        hover: ["beep boop!", "hello, human", "*whirr*", "greetings!", "ping!", "hi!", "online :)", "*happy beep*"],
+        zoomies: ["turbo mode!", "overclocking!", "*vrrrrm*", "max speed!", "wheee.exe"],
+        sneak: ["stealth mode...", "*quiet beeps*", "low power...", "nobody saw that"],
+        hop: ["boing.wav", "*spring*", "hop hop!", "bzzt!"],
+        wiggle: ["*happy beeps*", "bzzt bzzt!", "dance.exe", "*rattles*"],
+        chase: ["target acquired!", "tracking cursor...", "*chases*"],
+        flee: ["evasive maneuvers!", "nope.exe", "abort abort!", "can't catch me!"],
+        caught: ["boop!", "target reached!", "tag, you're it!"]
+    )
+}
+
 class WalkerCharacter {
     var window: NSWindow!
     var spriteLayer: CALayer!
@@ -101,11 +129,7 @@ class WalkerCharacter {
     var isHovered = false
     var lastHoverSoundTime: CFTimeInterval = 0
     var hoverReactionShown = false
-    private static let hoverPhrases = [
-        "hi!", "hey!", "aloha!", "oh hi!", "what's up?",
-        "hehe", "boop!", "*waves*", "yo!", "heya!",
-        "meega nala kweesta!", "ohana!", ":3"
-    ]
+    var phrases = PetPhrases.stitch
 
     // Popover state
     var isIdleForPopover = false
@@ -944,7 +968,7 @@ class WalkerCharacter {
         
         if !hoverReactionShown {
             hoverReactionShown = true
-            blurt(Self.hoverPhrases, for: 2.0)
+            blurt(phrases.hover, for: 2.0)
         }
     }
     
@@ -980,24 +1004,24 @@ class WalkerCharacter {
             hopCount = 3
             hopHeight = 10
             pickTarget(distance: 0.35...0.6, yChance: 0.7, yRange: 0.25)
-            blurt(["wheee!", "zoom zoom!", "nyoom!", "can't stop!", "hehehe!"])
+            blurt(phrases.zoomies)
         case .sneak:
             walkDuration = .random(in: 6.0...9.0)
             walkFrameInterval = 0.55
             pickTarget(distance: 0.08...0.2, yChance: 0.3, yRange: 0.08)
-            blurt(["shhh...", "*sneaks*", "tiptoe...", "nobody saw that"])
+            blurt(phrases.sneak)
         case .hop:
             walkDuration = .random(in: 1.6...2.6)
             hopCount = Int.random(in: 2...4)
             hopHeight = .random(in: 18...30)
             pickTarget(distance: 0.0...0.08, yChance: 0, yRange: 0)
-            blurt(["boing!", "hup hup!", "ih!", "*bounces*"])
+            blurt(phrases.hop)
         case .wiggle:
             walkDuration = .random(in: 1.2...2.0)
             walkFrameInterval = 0.12
             walkEndX = walkStartX
             walkEndY = walkStartY
-            blurt(["hehehe", "meega nala kweesta!", "*mischief*", "naga!", "ih ih ih!"])
+            blurt(phrases.wiggle)
         case .chase:
             let target = cursorTarget() ?? CGPoint(x: walkStartX, y: walkStartY)
             walkEndX = target.x
@@ -1005,7 +1029,7 @@ class WalkerCharacter {
             goingRight = walkEndX >= walkStartX
             walkDuration = max(1.5, Double(hypot(walkEndX - walkStartX, walkEndY - walkStartY)) * 6)
             walkFrameInterval = 0.15
-            blurt(["gaba!", "gonna get you!", "*chases*"], for: 1.2)
+            blurt(phrases.chase, for: 1.2)
         case .flee:
             let cursor = NSEvent.mouseLocation
             goingRight = cursor.x < window.frame.midX
@@ -1018,7 +1042,7 @@ class WalkerCharacter {
             walkEndX = goingRight ? min(walkStartX + dx, 0.95) : max(walkStartX - dx, 0.05)
             let dy = CGFloat.random(in: 0.05...0.15) * (cursor.y < window.frame.midY ? 1 : -1)
             walkEndY = min(max(walkStartY + dy, 0.05), 0.7)
-            blurt(["nope!", "can't catch me!", "hehehe!", "nyeh!", "ha!"])
+            blurt(phrases.flee)
         }
 
         updateFlip()
@@ -1200,7 +1224,7 @@ class WalkerCharacter {
 
             if elapsed >= walkDuration {
                 if antic == .chase {
-                    blurt(["boop!", "gotcha!", "tag, you're it!"])
+                    blurt(phrases.caught)
                     playCompletionSound()
                 }
                 enterPause()

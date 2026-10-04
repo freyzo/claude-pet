@@ -6,15 +6,14 @@
         <description>claude-pet update feed</description>
         <language>en</language>
         <!--
-            One-time setup (owner only):
-            a. Run Sparkle's generate_keys (private key is stored in your login Keychain)
-            b. Replace SUPublicEDKey in ClaudePet/Info.plist with the printed public key
-               (the current key belongs to the upstream project; updates can't be signed until it's swapped)
+            Signing key: EdDSA private key lives in the owner's login Keychain (account "claude-pet");
+            its public key is SUPublicEDKey in ClaudePet/Info.plist. Back it up by running generate_keys
+            with the account option set to claude-pet and -x claude-pet-private.key (keep that file secret).
 
             To publish a new release:
             1. Build, sign, notarize, staple the app
-            2. Create zip: ditto -c -k - -keepParent claude-pet.app claude-pet-vX.Y.zip
-            3. Sign for Sparkle: sign_update claude-pet-vX.Y.zip
+            2. Create zip: ditto -c -k -keepParent claude-pet.app claude-pet-vX.Y.zip
+            3. Sign for Sparkle: run sign_update on the zip with the account option set to claude-pet
             4. Add a new <item> below with the edSignature and length
             5. Upload zip to GitHub Releases (github.com/freyzo/claude-pet)
             6. Commit appcast.xml and push to main (the app reads it from raw.githubusercontent.com)

@@ -7,7 +7,7 @@
     <key>SUFeedURL</key>
     <string>https://raw.githubusercontent.com/freyzo/claude-pet/main/appcast.xml</string>
     <key>SUPublicEDKey</key>
-    <string>8QOCrY3j4crgz4iR5lmxyv+rA5vnqK6Qtd1XheMllP8=</string>
+    <string>rwd+GIwBbNRA9iEvEP0pdrsPVT4qmGY+N4sMtfIv4Js=</string>
     <key>SUEnableAutomaticChecks</key>
     <true/>
     <key>SUAllowsAutomaticUpdates</key>

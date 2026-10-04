@@ -42,6 +42,7 @@ private struct PetSpec {
     let visibleKey: String
     let color: NSColor
     let naughtiness: Double
+    let phrases: PetPhrases
     let start: CGPoint
     let firstPause: ClosedRange<Double>
 }
@@ -53,10 +54,10 @@ class ClaudePetController {
     private static let maxNameLength = 24
     private static let specs = [
         PetSpec(sprite: "stitch", defaultName: "Stitch", nameKey: DefaultsKey.petName, visibleKey: DefaultsKey.petVisible,
-                color: NSColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1.0), naughtiness: 1.0,
+                color: NSColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1.0), naughtiness: 1.0, phrases: .stitch,
                 start: CGPoint(x: 0.35, y: 0.3), firstPause: 0.5...1.5),
         PetSpec(sprite: "claude", defaultName: "Claude", nameKey: DefaultsKey.claudeName, visibleKey: DefaultsKey.claudeVisible,
-                color: NSColor(red: 1.0, green: 0.42, blue: 0.0, alpha: 1.0), naughtiness: 0.4,
+                color: NSColor(red: 1.0, green: 0.42, blue: 0.0, alpha: 1.0), naughtiness: 0.4, phrases: .robot,
                 start: CGPoint(x: 0.62, y: 0.28), firstPause: 0.8...2.2)
     ]
 
@@ -81,6 +82,7 @@ class ClaudePetController {
             pet.strollDuration = 8.75
             pet.characterColor = spec.color
             pet.naughtiness = spec.naughtiness
+            pet.phrases = spec.phrases
             pet.name = UserDefaults.standard.string(forKey: spec.nameKey) ?? spec.defaultName
             pet.positionX = spec.start.x
             pet.positionY = spec.start.y
