@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import ServiceManagement
 import Sparkle
+import os
 
 @main
 struct ClaudePetApp: App {
@@ -17,6 +18,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     private var petVisibilityItems: [NSMenuItem] = []
     private var renameItems: [NSMenuItem] = []
+    private var chatItems: [NSMenuItem] = []
+    private weak var pauseItem: NSMenuItem?
+    private weak var restingInfoItem: NSMenuItem?
     private weak var displayMenu: NSMenu?
     private weak var claudeMenu: NSMenu?
     private weak var launchAtLoginItem: NSMenuItem?
@@ -26,10 +30,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Writing to a Claude process that just died must be a recoverable error, not a crash.
         signal(SIGPIPE, SIG_IGN)
         NSApp.setActivationPolicy(.accessory)
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        Logger.app.info("claude-pet \(version, privacy: .public) launched")
         restoreSettings()
         controller = ClaudePetController()
         controller?.start()
         setupMenuBar()
+        controller?.contextMenuProvider = { [weak self] in self?.statusItem?.menu }
     }
 
     private func restoreSettings() {
@@ -52,10 +59,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem?.button {
             button.image = NSImage(named: "MenuBarIcon") ?? NSImage(systemSymbolName: "dog", accessibilityDescription: "claude-pet")
+            button.setAccessibilityLabel("claude-pet")
         }
 
         let menu = NSMenu()
         menu.delegate = self
+
+        for i in (controller?.pets ?? []).indices {
+            let item = NSMenuItem(title: "Chat", action: #selector(openChat(_:)), keyEquivalent: "")
+            item.tag = i
+            menu.addItem(item)
+            chatItems.append(item)
+        }
+        menu.addItem(NSMenuItem.separator())
 
         let renameItem = NSMenuItem(title: "Rename Pet", action: nil, keyEquivalent: "")
         let renameMenu = NSMenu()
@@ -72,6 +88,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             renameItems.append(item)
         }
         menu.addItem(renameItem)
+
+        let pause = NSMenuItem(title: "Pause Pets", action: #selector(togglePausePets(_:)), keyEquivalent: "p")
+        menu.addItem(pause)
+        pauseItem = pause
+        let resting = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        resting.isEnabled = false
+        menu.addItem(resting)
+        restingInfoItem = resting
 
         syncPetMenuItems()
 
@@ -240,6 +264,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 try service.register()
             }
         } catch {
+            Logger.app.error("Launch at Login change failed: \(error.localizedDescription, privacy: .public)")
             let alert = NSAlert()
             alert.messageText = "Couldn't change Launch at Login"
             alert.informativeText = error.localizedDescription
@@ -269,12 +294,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         controller?.promptRename(pets[sender.tag])
     }
 
+    @objc func openChat(_ sender: NSMenuItem) {
+        guard let controller, controller.pets.indices.contains(sender.tag) else { return }
+        let pet = controller.pets[sender.tag]
+        if !pet.window.isVisible { controller.setVisible(pet, true) }
+        NSApp.activate()
+        pet.openChatFromMenu()
+    }
+
+    @objc func togglePausePets(_ sender: NSMenuItem) {
+        guard let activity = controller?.activity else { return }
+        controller?.setPetsPaused(!activity.userPaused)
+        syncPetMenuItems()
+    }
+
     private func syncPetMenuItems() {
         for (i, pet) in (controller?.pets ?? []).enumerated() where i < petVisibilityItems.count {
             petVisibilityItems[i].title = "Show \(pet.name)"
             petVisibilityItems[i].state = pet.window.isVisible ? .on : .off
             renameItems[i].title = "\(pet.name)…"
+            chatItems[i].title = "Chat with \(pet.name)"
         }
+        let activity = controller?.activity
+        pauseItem?.state = activity?.userPaused == true ? .on : .off
+        let autoReason: String? = switch activity?.calmReason {
+        case .reduceMotion: "Reduce Motion is on"
+        case .lowPower: "Low Power Mode is on"
+        case .hot: "your Mac is running hot"
+        case .paused, nil: nil
+        }
+        // Explain automatic rest so it doesn't look like the pets broke.
+        restingInfoItem?.title = autoReason.map { "Pets are resting: \($0)" } ?? ""
+        restingInfoItem?.isHidden = autoReason == nil
     }
 
     @objc func toggleSounds(_ sender: NSMenuItem) {

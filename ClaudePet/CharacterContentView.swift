@@ -105,17 +105,29 @@ class CharacterContentView: NSView {
     }
 
     private var isDragging = false
+    private var showedContextMenu = false
     private var dragStartLocation: NSPoint = .zero
     private var windowStartOrigin: NSPoint = .zero
 
+    // The menu bar icon can be hidden (notch, crowded bar), so pets offer the same menu.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        character?.controller?.contextMenuProvider?()
+    }
+
     override func mouseDown(with event: NSEvent) {
+        showedContextMenu = false
+        if event.modifierFlags.contains(.control), let menu = menu(for: event) {
+            showedContextMenu = true
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+            return
+        }
         isDragging = false
         dragStartLocation = event.locationInWindow
         windowStartOrigin = window?.frame.origin ?? .zero
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let window = window else { return }
+        guard !showedContextMenu, let window = window else { return }
         let currentLocation = event.locationInWindow
         let deltaX = currentLocation.x - dragStartLocation.x
         let deltaY = currentLocation.y - dragStartLocation.y
@@ -137,11 +149,27 @@ class CharacterContentView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        if isDragging {
+        if showedContextMenu {
+            showedContextMenu = false
+        } else if isDragging {
             character?.finishDrag()
         } else {
             character?.handleClick()
         }
         isDragging = false
+    }
+
+    // MARK: - Accessibility
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func accessibilityLabel() -> String? { character?.name }
+    override func accessibilityHelp() -> String? {
+        "Desktop pet. Press to chat with Claude. Drag to move. Right-click for options."
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        character?.handleClick()
+        return character != nil
     }
 }

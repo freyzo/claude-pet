@@ -1,4 +1,5 @@
 import AppKit
+import os
 
 class ClaudeSession {
     enum Status: Equatable {
@@ -295,7 +296,10 @@ class ClaudeSession {
                 self.isRunning = false
                 self.isBusy = false
                 // Exits we caused (terminate / login restart) are already explained in the chat.
-                if unexpected { self.goOffline("stopped", notice: Self.stoppedNotice) }
+                if unexpected {
+                    Logger.session.error("Claude exited unexpectedly (status \(exited.terminationStatus, privacy: .public))")
+                    self.goOffline("stopped", notice: Self.stoppedNotice)
+                }
             }
         }
 
@@ -324,6 +328,7 @@ class ClaudeSession {
 
         do {
             try proc.run()
+            Logger.session.info("Claude started (pid \(proc.processIdentifier, privacy: .public), edits \(self.allowsEdits ? "on" : "off", privacy: .public), resume \(self.sessionId != nil, privacy: .public))")
             process = proc
             inputPipe = inPipe
             isRunning = true
@@ -355,6 +360,7 @@ class ClaudeSession {
     /// Ends the current answer. The next message continues the same conversation.
     func stop() {
         guard isBusy else { return }
+        Logger.session.info("Stopped by user")
         pendingMessages.removeAll()
         if !replyText.isEmpty {
             history.append(Message(role: .assistant, text: replyText))
@@ -368,6 +374,7 @@ class ClaudeSession {
 
     /// Forgets the conversation; the next message starts a brand-new one.
     func reset() {
+        Logger.session.info("New chat")
         terminate()
         pendingMessages.removeAll()
         history.removeAll()
@@ -423,6 +430,7 @@ class ClaudeSession {
     }
 
     private func goOffline(_ reason: String, notice text: String) {
+        Logger.session.notice("Offline: \(reason, privacy: .public)")
         status = .offline(reason)
         isBusy = false
         pendingMessages.removeAll()
@@ -455,6 +463,7 @@ class ClaudeSession {
 
     /// The CLI didn't know the saved chat (deleted, or made in another folder): start fresh and re-send.
     private func recoverFromRejectedResume() {
+        Logger.session.notice("Saved chat not found by Claude; starting fresh")
         let unanswered = messagesToProcess
         terminate()
         sessionId = nil
@@ -526,6 +535,8 @@ class ClaudeSession {
                 for block in content {
                     let blockType = block["type"] as? String ?? ""
                     if blockType == "text", let text = block["text"] as? String {
+                        // The CLI's own "please run /login" line; our friendly notice replaces it.
+                        if Self.isLoginProblem(text, isError: false) { continue }
                         replyText += text
                         onText?(text)
                     } else if blockType == "tool_use" {

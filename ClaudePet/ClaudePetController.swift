@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import os
 
 // Every UserDefaults key the app stores. Values are already on users' disks: never change them.
 enum DefaultsKey {
@@ -13,6 +14,7 @@ enum DefaultsKey {
     static let display = "display"
     static let workingFolder = "workingFolder"
     static let allowEdits = "allowEdits"
+    static let petsPaused = "petsPaused"
 }
 
 // One clock per pet: a pet's view link follows it across screens and idles while it's hidden.
@@ -51,6 +53,9 @@ class ClaudePetController {
     private(set) var pets: [WalkerCharacter] = []
     private var displayLinks: [CADisplayLink] = []
     private(set) var pinnedScreenName: String?
+    private(set) var activity: PetActivityMonitor?
+    /// Supplies the menu shown when a pet is right-clicked (the status bar menu).
+    var contextMenuProvider: (() -> NSMenu?)?
     private static let maxNameLength = 24
     private static let specs = [
         PetSpec(sprite: "stitch", defaultName: "Stitch", nameKey: DefaultsKey.petName, visibleKey: DefaultsKey.petVisible,
@@ -98,9 +103,27 @@ class ClaudePetController {
             startDisplayLink(for: pet)
         }
 
+        let activity = PetActivityMonitor()
+        activity.userPaused = UserDefaults.standard.bool(forKey: DefaultsKey.petsPaused)
+        activity.onChange = { [weak self] in self?.applyActivity() }
+        self.activity = activity
+        applyActivity()
+
         if !UserDefaults.standard.bool(forKey: DefaultsKey.hasCompletedOnboarding) {
             triggerOnboarding()
         }
+    }
+
+    private func applyActivity() {
+        guard let activity else { return }
+        pets.forEach { $0.isCalm = activity.isCalm }
+        // Nobody can see the screen: no frame work at all until they can.
+        displayLinks.forEach { $0.isPaused = !activity.isScreenVisible }
+    }
+
+    func setPetsPaused(_ paused: Bool) {
+        UserDefaults.standard.set(paused, forKey: DefaultsKey.petsPaused)
+        activity?.userPaused = paused
     }
 
     private func spec(for pet: WalkerCharacter) -> PetSpec? {
@@ -117,6 +140,7 @@ class ClaudePetController {
             pet.pauseSpriteForMenuHide()
         }
         UserDefaults.standard.set(visible, forKey: spec.visibleKey)
+        Logger.app.info("\(spec.defaultName, privacy: .public) \(visible ? "shown" : "hidden", privacy: .public)")
     }
 
     func setPinnedScreen(name: String?) {
@@ -142,6 +166,7 @@ class ClaudePetController {
         let old = workingFolder
         UserDefaults.standard.set(url?.path, forKey: DefaultsKey.workingFolder)
         guard workingFolder.standardizedFileURL != old.standardizedFileURL else { return }
+        Logger.app.info("Working folder changed (custom: \(self.hasCustomWorkingFolder, privacy: .public))")
         pets.forEach { $0.applyClaudeSettings(
             newConversation: true,
             notice: "**Now working in \(ClaudeSession.displayPath(workingFolder)).** Starting a fresh chat there."
@@ -155,6 +180,7 @@ class ClaudePetController {
     func setAllowsEdits(_ allowed: Bool) {
         guard allowed != allowsEdits else { return }
         UserDefaults.standard.set(allowed, forKey: DefaultsKey.allowEdits)
+        Logger.app.info("Edits & commands \(allowed ? "on" : "off", privacy: .public)")
         pets.forEach { $0.applyClaudeSettings(
             newConversation: false,
             notice: allowed

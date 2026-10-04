@@ -86,7 +86,7 @@ class TerminalView: NSView, NSTextViewDelegate {
     private func setupViews() {
         let t = theme
         let padding = Self.padding
-        inputLineHeight = ceil(NSLayoutManager().defaultLineHeight(for: t.font))
+        inputLineHeight = ceil(NSLayoutManager().defaultLineHeight(for: bodyFont))
         let inputHeight = inputLineHeight + Self.textInset.height * 2 + Self.barInset * 2
         let inputBottom = Self.inputBottom
 
@@ -125,9 +125,10 @@ class TerminalView: NSView, NSTextViewDelegate {
         ]
 
         scrollView.documentView = textView
+        textView.setAccessibilityLabel("Conversation")
         addSubview(scrollView)
 
-        emptyStateLabel.font = t.font
+        emptyStateLabel.font = bodyFont
         emptyStateLabel.textColor = t.textDim
         emptyStateLabel.alignment = .center
         emptyStateLabel.frame = NSRect(x: padding + 20, y: scrollView.frame.midY - 20, width: frame.width - (padding + 20) * 2, height: 40)
@@ -155,7 +156,7 @@ class TerminalView: NSView, NSTextViewDelegate {
         inputField.importsGraphics = false
         inputField.allowsUndo = true
         inputField.drawsBackground = false
-        inputField.font = t.font
+        inputField.font = bodyFont
         inputField.textColor = t.textPrimary
         inputField.insertionPointColor = t.textPrimary
         inputField.textContainerInset = Self.textInset
@@ -255,34 +256,101 @@ class TerminalView: NSView, NSTextViewDelegate {
         scrollToBottom()
     }
 
-    // MARK: - Append Methods
+    // MARK: - Transcript
 
-    private var messageSpacing: NSParagraphStyle {
-        let p = NSMutableParagraphStyle()
-        p.paragraphSpacingBefore = 8
-        return p
+    private enum Speaker { case user, pet }
+    private var lastSpeaker: Speaker?
+    private var petName = "Pet"
+    private var petAvatar: NSImage?
+
+    // Message text lines up under the speaker's name, right of the avatar.
+    private static let textIndent: CGFloat = 28
+    private let bodyFont = TerminalView.roundedFont(13)
+    private let codeFont = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
+
+    static func roundedFont(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
+        let base = NSFont.systemFont(ofSize: size, weight: weight)
+        guard let descriptor = base.fontDescriptor.withDesign(.rounded) else { return base }
+        return NSFont(descriptor: descriptor, size: size) ?? base
     }
 
-    private func ensureNewline() {
-        if let storage = textView.textStorage, storage.length > 0 {
-            if !storage.string.hasSuffix("\n") {
-                storage.append(NSAttributedString(string: "\n"))
+    func setPetAvatar(_ sprite: CGImage?, background: NSColor) {
+        petAvatar = sprite.map { sprite in
+            NSImage(size: NSSize(width: 20, height: 20), flipped: false) { rect in
+                let circle = NSBezierPath(ovalIn: rect)
+                background.setFill()
+                circle.fill()
+                circle.addClip()
+                NSGraphicsContext.current?.cgContext.draw(sprite, in: rect.insetBy(dx: 2, dy: 2))
+                return true
             }
         }
     }
 
-    func appendUser(_ text: String) {
-        let t = theme
+    private func paragraph(extraIndent: CGFloat = 0, hanging: CGFloat = 0, before: CGFloat = 0, after: CGFloat = 5) -> NSMutableParagraphStyle {
+        let p = NSMutableParagraphStyle()
+        p.firstLineHeadIndent = Self.textIndent + extraIndent
+        p.headIndent = Self.textIndent + extraIndent + hanging
+        p.paragraphSpacingBefore = before
+        p.paragraphSpacing = after
+        p.lineSpacing = 2
+        // Bullets/numbers sit before a tab; wrapped lines align with the text, not the marker.
+        if hanging > 0 { p.tabStops = [NSTextTab(textAlignment: .left, location: p.headIndent)] }
+        return p
+    }
+
+    private func ensureNewline() {
+        if let storage = textView.textStorage, storage.length > 0, !storage.string.hasSuffix("\n") {
+            storage.append(NSAttributedString(string: "\n"))
+        }
+    }
+
+    private func append(_ text: NSAttributedString) {
+        textView.textStorage?.append(text)
+    }
+
+    /// Starts a message block with the speaker's avatar and name, unless they're still talking.
+    private func beginTurn(_ speaker: Speaker) {
         ensureNewline()
-        let para = messageSpacing
-        let attributed = NSMutableAttributedString()
-        attributed.append(NSAttributedString(string: "> ", attributes: [
-            .font: t.fontBold, .foregroundColor: t.accentColor, .paragraphStyle: para
+        guard speaker != lastSpeaker else { return }
+        lastSpeaker = speaker
+        let t = theme
+        let icon = NSTextAttachment()
+        switch speaker {
+        case .pet:
+            icon.image = petAvatar ?? NSImage(systemSymbolName: "pawprint.circle.fill", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(paletteColors: [t.accentColor]))
+        case .user:
+            let tint = t.textDim
+            icon.image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { rect in
+                tint.withAlphaComponent(0.25).setFill()
+                NSBezierPath(ovalIn: rect).fill()
+                let person = NSImage(systemSymbolName: "person.fill", accessibilityDescription: nil)?
+                    .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold).applying(.init(paletteColors: [tint])))
+                person?.draw(in: rect.insetBy(dx: 5, dy: 5))
+                return true
+            }
+        }
+        icon.bounds = CGRect(x: 0, y: -5, width: 20, height: 20)
+
+        let header = NSMutableAttributedString(attachment: icon)
+        header.append(NSAttributedString(string: "\t" + (speaker == .pet ? petName : "You") + "\n", attributes: [
+            .font: Self.roundedFont(13, .bold),
+            .foregroundColor: speaker == .pet ? t.accentColor : t.textPrimary
         ]))
-        attributed.append(NSAttributedString(string: "\(text)\n", attributes: [
-            .font: t.fontBold, .foregroundColor: t.textPrimary, .paragraphStyle: para
+        let p = NSMutableParagraphStyle()
+        p.tabStops = [NSTextTab(textAlignment: .left, location: Self.textIndent)]
+        p.paragraphSpacingBefore = (textView.textStorage?.length ?? 0) > 0 ? 16 : 0
+        p.paragraphSpacing = 4
+        header.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: header.length))
+        append(header)
+    }
+
+    func appendUser(_ text: String) {
+        beginTurn(.user)
+        append(NSAttributedString(string: text + "\n", attributes: [
+            .font: bodyFont, .foregroundColor: theme.textPrimary, .paragraphStyle: paragraph()
         ]))
-        textView.textStorage?.append(attributed)
         scrollToBottom()
     }
 
@@ -292,71 +360,74 @@ class TerminalView: NSView, NSTextViewDelegate {
             cleaned = cleaned.replacingOccurrences(of: "^\n+", with: "", options: .regularExpression)
         }
         currentAssistantText += cleaned
-        if !cleaned.isEmpty {
-            textView.textStorage?.append(renderMarkdown(cleaned))
-            scrollToBottom()
-        }
+        guard !cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        beginTurn(.pet)
+        append(renderMarkdown(cleaned))
+        scrollToBottom()
     }
 
     func appendError(_ text: String) {
-        let t = theme
-        textView.textStorage?.append(NSAttributedString(string: text + "\n", attributes: [
-            .font: t.font, .foregroundColor: t.errorColor
+        beginTurn(.pet)
+        append(NSAttributedString(string: text.trimmingCharacters(in: .whitespacesAndNewlines) + "\n", attributes: [
+            .font: bodyFont, .foregroundColor: theme.errorColor, .paragraphStyle: paragraph()
         ]))
         scrollToBottom()
     }
 
     func appendToolUse(toolName: String, summary: String) {
         let t = theme
-        let block = NSMutableAttributedString()
-        block.append(NSAttributedString(string: "  \(toolName.uppercased()) ", attributes: [
-            .font: t.fontBold, .foregroundColor: t.accentColor
-        ]))
-        block.append(NSAttributedString(string: "\(summary)\n", attributes: [
-            .font: t.font, .foregroundColor: t.textDim
-        ]))
-        textView.textStorage?.append(block)
+        beginTurn(.pet)
+        let line = NSMutableAttributedString(string: toolName + "  ", attributes: [
+            .font: Self.roundedFont(11.5, .semibold), .foregroundColor: t.accentColor
+        ])
+        line.append(NSAttributedString(string: summary + "\n", attributes: [.font: codeFont, .foregroundColor: t.textDim]))
+        line.addAttribute(.paragraphStyle, value: paragraph(after: 2), range: NSRange(location: 0, length: line.length))
+        append(line)
         scrollToBottom()
     }
 
     func appendToolResult(summary: String, isError: Bool) {
         let t = theme
-        let color = isError ? t.errorColor : t.successColor
-        let prefix = isError ? "  FAIL " : "  DONE "
-        let block = NSMutableAttributedString()
-        block.append(NSAttributedString(string: prefix, attributes: [
-            .font: t.fontBold, .foregroundColor: color
-        ]))
-        block.append(NSAttributedString(string: "\(summary)\n", attributes: [
-            .font: t.font, .foregroundColor: t.textDim
-        ]))
-        textView.textStorage?.append(block)
+        beginTurn(.pet)
+        let line = NSMutableAttributedString(string: isError ? "✕  " : "✓  ", attributes: [
+            .font: Self.roundedFont(11.5, .bold), .foregroundColor: isError ? t.errorColor : t.successColor
+        ])
+        let detail = summary.isEmpty ? (isError ? "failed" : "done") : summary
+        line.append(NSAttributedString(string: detail + "\n", attributes: [.font: codeFont, .foregroundColor: t.textDim]))
+        line.addAttribute(.paragraphStyle, value: paragraph(after: 5), range: NSRange(location: 0, length: line.length))
+        append(line)
+        scrollToBottom()
+    }
+
+    func appendNotice(_ markdown: String) {
+        beginTurn(.pet)
+        append(renderMarkdown(markdown))
         scrollToBottom()
     }
 
     func replayHistory(_ messages: [ClaudeSession.Message]) {
-        let t = theme
         textView.textStorage?.setAttributedString(NSAttributedString(string: ""))
+        lastSpeaker = nil
+        currentAssistantText = ""
         for msg in messages {
             switch msg.role {
             case .user:
                 appendUser(msg.text)
             case .assistant:
-                textView.textStorage?.append(renderMarkdown(msg.text + "\n"))
+                beginTurn(.pet)
+                append(renderMarkdown(msg.text))
             case .error:
                 appendError(msg.text)
             case .notice:
-                ensureNewline()
-                textView.textStorage?.append(renderMarkdown(msg.text + "\n"))
+                appendNotice(msg.text)
             case .toolUse:
-                textView.textStorage?.append(NSAttributedString(string: "  \(msg.text)\n", attributes: [
-                    .font: t.font, .foregroundColor: t.accentColor
-                ]))
+                let parts = msg.text.split(separator: ":", maxSplits: 1)
+                appendToolUse(toolName: String(parts.first ?? ""),
+                              summary: parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : "")
             case .toolResult:
-                let isErr = msg.text.hasPrefix("ERROR:")
-                textView.textStorage?.append(NSAttributedString(string: "  \(msg.text)\n", attributes: [
-                    .font: t.font, .foregroundColor: isErr ? t.errorColor : t.successColor
-                ]))
+                let isError = msg.text.hasPrefix("ERROR:")
+                let summary = isError ? String(msg.text.dropFirst(6)).trimmingCharacters(in: .whitespaces) : msg.text
+                appendToolResult(summary: summary, isError: isError)
             }
         }
         scrollToBottom()
@@ -367,17 +438,12 @@ class TerminalView: NSView, NSTextViewDelegate {
         textView.scrollToEndOfDocument(nil)
     }
 
-    func appendNotice(_ markdown: String) {
-        ensureNewline()
-        textView.textStorage?.append(renderMarkdown(markdown + "\n"))
-        scrollToBottom()
-    }
-
     func setPetName(_ name: String) {
-        let t = theme
+        petName = name
+        inputField.setAccessibilityLabel("Message \(name)")
         inputField.placeholder = NSAttributedString(
             string: "Ask \(name)…",
-            attributes: [.font: t.font, .foregroundColor: t.textDim]
+            attributes: [.font: bodyFont, .foregroundColor: theme.textDim]
         )
     }
 
@@ -389,151 +455,190 @@ class TerminalView: NSView, NSTextViewDelegate {
 
     // MARK: - Markdown Rendering
 
+    /// Renders one complete markdown message; always ends with a newline.
     private func renderMarkdown(_ text: String) -> NSAttributedString {
         let t = theme
-        let result = NSMutableAttributedString()
+        let out = NSMutableAttributedString()
         let lines = text.components(separatedBy: "\n")
-        var inCodeBlock = false
-        var codeLines: [String] = []
+        var i = 0
 
-        for (i, line) in lines.enumerated() {
-            let suffix = i < lines.count - 1 ? "\n" : ""
+        func addParagraph(_ line: NSMutableAttributedString, _ style: NSParagraphStyle) {
+            line.append(NSAttributedString(string: "\n"))
+            line.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: line.length))
+            out.append(line)
+        }
 
-            if line.hasPrefix("```") {
-                if inCodeBlock {
-                    let codeText = codeLines.joined(separator: "\n")
-                    let codeFont = NSFont.monospacedSystemFont(ofSize: t.font.pointSize - 1, weight: .regular)
-                    result.append(NSAttributedString(string: codeText + "\n", attributes: [
-                        .font: codeFont, .foregroundColor: t.textPrimary, .backgroundColor: t.inputBg
-                    ]))
-                    inCodeBlock = false
-                    codeLines = []
-                } else {
-                    inCodeBlock = true
+        while i < lines.count {
+            let line = lines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed.hasPrefix("```") {
+                var code: [String] = []
+                i += 1
+                while i < lines.count, !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                    code.append(lines[i])
+                    i += 1
                 }
+                i += 1
+                out.append(codeBlock(code))
                 continue
             }
-
-            if inCodeBlock {
-                codeLines.append(line)
+            if trimmed.hasPrefix("|") {
+                var rows: [String] = []
+                while i < lines.count, lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("|") {
+                    rows.append(lines[i])
+                    i += 1
+                }
+                out.append(table(rows))
                 continue
             }
+            i += 1
+            if trimmed.isEmpty { continue }
 
-            if line.hasPrefix("### ") {
-                result.append(NSAttributedString(string: String(line.dropFirst(4)) + suffix, attributes: [
-                    .font: NSFont.systemFont(ofSize: t.font.pointSize, weight: .bold), .foregroundColor: t.accentColor
-                ]))
-            } else if line.hasPrefix("## ") {
-                result.append(NSAttributedString(string: String(line.dropFirst(3)) + suffix, attributes: [
-                    .font: NSFont.systemFont(ofSize: t.font.pointSize + 1, weight: .bold), .foregroundColor: t.accentColor
-                ]))
-            } else if line.hasPrefix("# ") {
-                result.append(NSAttributedString(string: String(line.dropFirst(2)) + suffix, attributes: [
-                    .font: NSFont.systemFont(ofSize: t.font.pointSize + 2, weight: .bold), .foregroundColor: t.accentColor
-                ]))
-            } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
-                let content = String(line.dropFirst(2))
-                result.append(NSAttributedString(string: "  \u{2022} ", attributes: [
-                    .font: t.font, .foregroundColor: t.accentColor
-                ]))
-                result.append(renderInlineMarkdown(content + suffix, theme: t))
+            if let match = trimmed.firstMatch(of: #/^(#{1,6})\s+(.+)$/#) {
+                let size: CGFloat = match.1.count == 1 ? 16 : match.1.count == 2 ? 15 : 13.5
+                addParagraph(renderInline(String(match.2), font: Self.roundedFont(size, .bold), color: t.textPrimary),
+                             paragraph(before: 6, after: 4))
+            } else if trimmed.wholeMatch(of: #/(-{3,}|\*{3,}|_{3,})/#) != nil {
+                addParagraph(NSMutableAttributedString(string: String(repeating: "─", count: 28), attributes: [
+                    .font: bodyFont, .foregroundColor: t.separatorColor
+                ]), paragraph(before: 2, after: 6))
+            } else if let match = line.firstMatch(of: #/^(\s*)[-*+]\s+(.*)$/#) {
+                let level = CGFloat(min(match.1.count / 2, 3))
+                let item = NSMutableAttributedString(string: "•\t", attributes: [.font: bodyFont, .foregroundColor: t.accentColor])
+                item.append(renderInline(String(match.2), font: bodyFont, color: t.textPrimary))
+                addParagraph(item, paragraph(extraIndent: level * 14, hanging: 14, after: 3))
+            } else if let match = line.firstMatch(of: #/^(\s*)(\d+)[.)]\s+(.*)$/#) {
+                let level = CGFloat(min(match.1.count / 2, 3))
+                let item = NSMutableAttributedString(string: "\(match.2).\t", attributes: [
+                    .font: Self.roundedFont(13, .semibold), .foregroundColor: t.accentColor
+                ])
+                item.append(renderInline(String(match.3), font: bodyFont, color: t.textPrimary))
+                addParagraph(item, paragraph(extraIndent: level * 14, hanging: 20, after: 3))
+            } else if let match = trimmed.firstMatch(of: #/^>\s?(.*)$/#) {
+                let quote = NSMutableAttributedString(string: "▎", attributes: [.font: bodyFont, .foregroundColor: t.separatorColor])
+                quote.append(renderInline(String(match.1), font: bodyFont, color: t.textDim))
+                addParagraph(quote, paragraph(extraIndent: 2, after: 3))
             } else {
-                result.append(renderInlineMarkdown(line + suffix, theme: t))
+                addParagraph(renderInline(trimmed, font: bodyFont, color: t.textPrimary), paragraph())
             }
         }
-
-        if inCodeBlock && !codeLines.isEmpty {
-            let codeText = codeLines.joined(separator: "\n")
-            let codeFont = NSFont.monospacedSystemFont(ofSize: t.font.pointSize - 1, weight: .regular)
-            result.append(NSAttributedString(string: codeText + "\n", attributes: [
-                .font: codeFont, .foregroundColor: t.textPrimary, .backgroundColor: t.inputBg
-            ]))
-        }
-
-        return result
+        return out
     }
 
-    private func renderInlineMarkdown(_ text: String, theme t: PopoverTheme) -> NSAttributedString {
+    private func codeBlock(_ lines: [String]) -> NSAttributedString {
+        let t = theme
+        let out = NSMutableAttributedString()
+        guard !lines.isEmpty else { return out }
+        // Pad every line to the same width so the background reads as one box.
+        let width = min(lines.map(\.count).max() ?? 0, 80)
+        for (index, line) in lines.enumerated() {
+            let padded = " " + line.padding(toLength: max(width, line.count), withPad: " ", startingAt: 0) + " \n"
+            let p = paragraph(before: index == 0 ? 4 : 0, after: index == lines.count - 1 ? 8 : 0)
+            p.lineSpacing = 1
+            out.append(NSAttributedString(string: padded, attributes: [
+                .font: codeFont, .foregroundColor: t.textPrimary, .backgroundColor: t.inputBg, .paragraphStyle: p
+            ]))
+        }
+        return out
+    }
+
+    private func table(_ rows: [String]) -> NSAttributedString {
+        let t = theme
+        let out = NSMutableAttributedString()
+        var cells = rows.map { row -> [String] in
+            var body = row.trimmingCharacters(in: .whitespaces)
+            if body.hasPrefix("|") { body.removeFirst() }
+            if body.hasSuffix("|") { body.removeLast() }
+            return body.split(separator: "|", omittingEmptySubsequences: false).map {
+                $0.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
+            }
+        }
+        let isRule: ([String]) -> Bool = { $0.allSatisfy { $0.wholeMatch(of: #/:?-{2,}:?/#) != nil } }
+        let headerRow = cells.count > 1 && isRule(cells[1]) ? 0 : nil
+        cells.removeAll(where: isRule)
+        let columns = cells.map(\.count).max() ?? 0
+        let widths = (0..<columns).map { column in
+            min(cells.map { column < $0.count ? $0[column].count : 0 }.max() ?? 0, 28)
+        }
+        for (index, row) in cells.enumerated() {
+            let text = (0..<columns).map { column -> String in
+                let cell = column < row.count ? row[column] : ""
+                return cell.padding(toLength: max(widths[column], cell.count), withPad: " ", startingAt: 0)
+            }.joined(separator: "  │  ")
+            let isHeader = index == headerRow
+            out.append(NSAttributedString(string: text + "\n", attributes: [
+                .font: isHeader ? NSFont.monospacedSystemFont(ofSize: 11.5, weight: .semibold) : codeFont,
+                .foregroundColor: isHeader ? t.textPrimary : t.textPrimary.withAlphaComponent(0.9),
+                .paragraphStyle: paragraph(before: index == 0 ? 4 : 0, after: index == cells.count - 1 ? 8 : 2)
+            ]))
+            if isHeader {
+                let rule = widths.map { String(repeating: "─", count: $0) }.joined(separator: "──┼──")
+                out.append(NSAttributedString(string: rule + "\n", attributes: [
+                    .font: codeFont, .foregroundColor: t.separatorColor, .paragraphStyle: paragraph(after: 2)
+                ]))
+            }
+        }
+        return out
+    }
+
+    private func renderInline(_ text: String, font: NSFont, color: NSColor) -> NSMutableAttributedString {
+        let t = theme
         let result = NSMutableAttributedString()
+        let boldFont = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+        let italicFont = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
         var i = text.startIndex
 
+        func plain(_ s: Substring) {
+            result.append(NSAttributedString(string: String(s), attributes: [.font: font, .foregroundColor: color]))
+        }
+
         while i < text.endIndex {
-            if text[i] == "`" {
-                let afterTick = text.index(after: i)
-                if afterTick < text.endIndex, let closeIdx = text[afterTick...].firstIndex(of: "`") {
-                    let code = String(text[afterTick..<closeIdx])
-                    let codeFont = NSFont.monospacedSystemFont(ofSize: t.font.pointSize - 0.5, weight: .regular)
-                    result.append(NSAttributedString(string: code, attributes: [
-                        .font: codeFont, .foregroundColor: t.accentColor, .backgroundColor: t.inputBg
-                    ]))
-                    i = text.index(after: closeIdx)
-                    continue
-                }
+            let rest = text[i...]
+            if rest.hasPrefix("`"), let close = rest.dropFirst().firstIndex(of: "`") {
+                let code = rest[rest.index(after: rest.startIndex)..<close]
+                result.append(NSAttributedString(string: " \(code) ", attributes: [
+                    .font: codeFont, .foregroundColor: t.accentColor, .backgroundColor: t.inputBg
+                ]))
+                i = text.index(after: close)
+                continue
             }
-            if text[i] == "*",
-               text.index(after: i) < text.endIndex, text[text.index(after: i)] == "*" {
-                let start = text.index(i, offsetBy: 2)
-                if start < text.endIndex, let range = text.range(of: "**", range: start..<text.endIndex) {
-                    let bold = String(text[start..<range.lowerBound])
-                    result.append(NSAttributedString(string: bold, attributes: [
-                        .font: t.fontBold, .foregroundColor: t.textPrimary
-                    ]))
-                    i = range.upperBound
-                    continue
-                }
+            if rest.hasPrefix("**"), let close = rest.dropFirst(2).range(of: "**") {
+                let inner = rest[rest.index(rest.startIndex, offsetBy: 2)..<close.lowerBound]
+                result.append(renderInline(String(inner), font: boldFont, color: color == t.textDim ? color : t.textPrimary))
+                i = close.upperBound
+                continue
             }
-            if text[i] == "[" {
-                let afterBracket = text.index(after: i)
-                if afterBracket < text.endIndex,
-                   let closeBracket = text[afterBracket...].firstIndex(of: "]") {
-                    let parenStart = text.index(after: closeBracket)
-                    if parenStart < text.endIndex && text[parenStart] == "(" {
-                        let afterParen = text.index(after: parenStart)
-                        if afterParen < text.endIndex,
-                           let closeParen = text[afterParen...].firstIndex(of: ")") {
-                            let linkText = String(text[afterBracket..<closeBracket])
-                            let urlStr = String(text[afterParen..<closeParen])
-                            var attrs: [NSAttributedString.Key: Any] = [
-                                .font: t.font,
-                                .foregroundColor: t.accentColor,
-                                .underlineStyle: NSUnderlineStyle.single.rawValue
-                            ]
-                            if let url = URL(string: urlStr) {
-                                attrs[.link] = url
-                                attrs[.cursor] = NSCursor.pointingHand
-                            }
-                            result.append(NSAttributedString(string: linkText, attributes: attrs))
-                            i = text.index(after: closeParen)
-                            continue
-                        }
-                    }
-                }
+            if rest.hasPrefix("*"), let match = rest.prefixMatch(of: #/\*([^\s*][^*]*?)\*/#) {
+                var attrs: [NSAttributedString.Key: Any] = [.font: italicFont, .foregroundColor: color]
+                // The rounded system font has no italic face; slant it instead.
+                if !italicFont.fontDescriptor.symbolicTraits.contains(.italic) { attrs[.obliqueness] = 0.18 }
+                result.append(NSAttributedString(string: String(match.1), attributes: attrs))
+                i = match.range.upperBound
+                continue
             }
-            if text[i] == "h" {
-                let remaining = String(text[i...])
-                if remaining.hasPrefix("https://") || remaining.hasPrefix("http://") {
-                    var j = i
-                    while j < text.endIndex && !text[j].isWhitespace && text[j] != ")" && text[j] != ">" {
-                        j = text.index(after: j)
-                    }
-                    let urlStr = String(text[i..<j])
-                    var attrs: [NSAttributedString.Key: Any] = [
-                        .font: t.font,
-                        .foregroundColor: t.accentColor,
-                        .underlineStyle: NSUnderlineStyle.single.rawValue
-                    ]
-                    if let url = URL(string: urlStr) {
-                        attrs[.link] = url
-                    }
-                    result.append(NSAttributedString(string: urlStr, attributes: attrs))
-                    i = j
-                    continue
+            if rest.hasPrefix("["), let match = rest.prefixMatch(of: #/\[([^\]]+)\]\(([^)\s]+)\)/#) {
+                var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: t.accentColor]
+                if let url = URL(string: String(match.2)) {
+                    attrs[.link] = url
+                    attrs[.cursor] = NSCursor.pointingHand
                 }
+                result.append(NSAttributedString(string: String(match.1), attributes: attrs))
+                i = match.range.upperBound
+                continue
             }
-            result.append(NSAttributedString(string: String(text[i]), attributes: [
-                .font: t.font, .foregroundColor: t.textPrimary
-            ]))
-            i = text.index(after: i)
+            if rest.hasPrefix("http://") || rest.hasPrefix("https://"),
+               let match = rest.prefixMatch(of: #/https?:\/\/[^\s)>]+/#) {
+                var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: t.accentColor]
+                if let url = URL(string: String(match.output)) { attrs[.link] = url }
+                result.append(NSAttributedString(string: String(match.output), attributes: attrs))
+                i = match.range.upperBound
+                continue
+            }
+            // Plain run up to the next character that could start markup.
+            let next = rest.dropFirst().firstIndex { "`*[h".contains($0) } ?? text.endIndex
+            plain(text[i..<next])
+            i = next
         }
         return result
     }

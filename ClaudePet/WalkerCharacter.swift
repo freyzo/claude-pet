@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import os
 
 class PopoverDragTitleBarView: NSView {
     var onDragChanged: ((NSPoint) -> Void)?
@@ -124,6 +125,11 @@ class WalkerCharacter {
 
     // Moving windows need every frame; a resting pet only checks timers and the cursor.
     var needsSmoothFrames: Bool { isWalking || isBeingDragged }
+
+    // Resting (Pause Pets, Reduce Motion, Low Power, heat): no roaming, but hover/click/drag still work.
+    var isCalm = false {
+        didSet { if isCalm && isWalking { enterPause() } }
+    }
     
     // Hover interaction state
     var isHovered = false
@@ -205,7 +211,7 @@ class WalkerCharacter {
         let w2 = Self.cgImagePreservingAlpha(named: spriteWalk2Name)
 
         guard let idleImg, let w1, let w2 else {
-            print("Sprite images not found for set: idle=\(spriteIdleName), walk1=\(spriteWalk1Name), walk2=\(spriteWalk2Name)")
+            Logger.app.error("Sprite images not found for \(self.spriteIdleName, privacy: .public)")
             return
         }
 
@@ -328,6 +334,15 @@ class WalkerCharacter {
             closePopover()
         } else {
             openPopover()
+        }
+    }
+
+    /// Keyboard/menu path to the chat: opens it if needed, never toggles it closed.
+    func openChatFromMenu() {
+        if !isIdleForPopover { handleClick() }
+        popoverWindow?.makeKeyAndOrderFront(nil)
+        if !isOnboarding, let terminal = terminalView {
+            popoverWindow?.makeFirstResponder(terminal.inputField)
         }
     }
 
@@ -663,6 +678,7 @@ class WalkerCharacter {
             characterColor: characterColor
         )
         terminal.autoresizingMask = [.width, .height]
+        terminal.setPetAvatar(spriteImages.first, background: t.accentColor.withAlphaComponent(0.2))
         terminal.setPetName(name)
         terminal.onSendMessage = { [weak self, weak terminal] message in
             self?.claudeSession?.send(message: message)
@@ -1186,7 +1202,7 @@ class WalkerCharacter {
 
         let now = CACurrentMediaTime()
 
-        if cursorArrived, !isOnboarding, now >= fleeCooldownEnd,
+        if cursorArrived, !isOnboarding, !isCalm, now >= fleeCooldownEnd,
            !isWalking || antic == .stroll || antic == .sneak,
            Double.random(in: 0..<1) < 0.45 * naughtiness {
             fleeCooldownEnd = now + 12
@@ -1194,7 +1210,7 @@ class WalkerCharacter {
         }
 
         if isPaused {
-            if now >= pauseEndTime {
+            if now >= pauseEndTime && !isCalm {
                 startWalk()
             } else {
                 placeWindow(in: screenFrame)
