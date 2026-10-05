@@ -91,9 +91,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(renameItem)
 
         for i in (controller?.pets ?? []).indices {
-            let item = NSMenuItem(title: "Corner", action: #selector(toggleCorner(_:)), keyEquivalent: "")
+            let item = NSMenuItem(title: "Cozy Corner", action: #selector(toggleCorner(_:)), keyEquivalent: "")
             item.tag = i
-            item.toolTip = "Sends the pet to a bottom corner of the screen. It stays there until you uncheck this."
             menu.addItem(item)
             cornerItems.append(item)
         }
@@ -343,7 +342,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             petVisibilityItems[i].state = pet.window.isVisible ? .on : .off
             renameItems[i].title = "\(pet.name)…"
             chatItems[i].title = "Chat with \(pet.name)"
-            cornerItems[i].title = "Keep \(pet.name) in Corner"
+            cornerItems[i].title = "Send \(pet.name) to Cozy Corner"
+            cornerItems[i].toolTip = "\(pet.name) plays in a little bottom-corner spot, out of your way, until you uncheck this."
             cornerItems[i].state = pet.isParked ? .on : .off
         }
         let activity = controller?.activity

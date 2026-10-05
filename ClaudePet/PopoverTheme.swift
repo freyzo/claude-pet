@@ -34,7 +34,7 @@ struct PopoverTheme {
 
     static let midnight = PopoverTheme(
         name: "Midnight",
-        popoverBg: NSColor(red: 0.07, green: 0.07, blue: 0.07, alpha: 0.96),
+        popoverBg: NSColor(red: 0.07, green: 0.07, blue: 0.07, alpha: 1),
         popoverBorder: NSColor(red: 1.0, green: 0.4, blue: 0.0, alpha: 0.7),
         popoverBorderWidth: 1.5,
         popoverCornerRadius: 12,
@@ -62,7 +62,7 @@ struct PopoverTheme {
 
     static let peach = PopoverTheme(
         name: "Peach",
-        popoverBg: NSColor(red: 1.0, green: 0.97, blue: 0.92, alpha: 0.97),
+        popoverBg: NSColor(red: 1.0, green: 0.97, blue: 0.92, alpha: 1),
         popoverBorder: NSColor(red: 0.95, green: 0.55, blue: 0.65, alpha: 0.8),
         popoverBorderWidth: 1,
         popoverCornerRadius: 24,
@@ -90,7 +90,7 @@ struct PopoverTheme {
 
     static let cloud = PopoverTheme(
         name: "Cloud",
-        popoverBg: NSColor(red: 0.94, green: 0.95, blue: 0.96, alpha: 0.98),
+        popoverBg: NSColor(red: 0.94, green: 0.95, blue: 0.96, alpha: 1),
         popoverBorder: NSColor(red: 0.78, green: 0.80, blue: 0.84, alpha: 0.6),
         popoverBorderWidth: 1,
         popoverCornerRadius: 16,
@@ -118,7 +118,7 @@ struct PopoverTheme {
 
     static let moss = PopoverTheme(
         name: "Moss",
-        popoverBg: NSColor(red: 0.82, green: 0.84, blue: 0.78, alpha: 0.98),
+        popoverBg: NSColor(red: 0.82, green: 0.84, blue: 0.78, alpha: 1),
         popoverBorder: NSColor(red: 0.55, green: 0.58, blue: 0.50, alpha: 0.8),
         popoverBorderWidth: 1,
         popoverCornerRadius: 10,

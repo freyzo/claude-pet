@@ -1113,11 +1113,15 @@ class WalkerCharacter {
             walkFrameInterval = 0.15
         }
 
+        if isParked && antic != .travel { keepInsideCozyCorner() }
+
         updateFlip()
         startWalkSpriteTimer()
     }
 
     private func pickAntic() -> Antic {
+        // In the cozy corner only small games that stay put.
+        if isParked { return [.stroll, .stroll, .hop, .wiggle, .sneak].randomElement() ?? .stroll }
         let n = naughtiness
         var options: [(Antic, Double)] = [
             (.stroll, 1 + 3 * (1 - n)),
@@ -1187,8 +1191,8 @@ class WalkerCharacter {
         isWalking = false
         isPaused = true
         showIdleSprite()
-        // Naughtier pets sit still for less time.
-        let delay = Double.random(in: 1.5...4.0) * (1 - 0.4 * naughtiness)
+        // Naughtier pets sit still for less time; cozy-corner pets linger longer.
+        let delay = Double.random(in: 1.5...4.0) * (1 - 0.4 * naughtiness) * (isParked ? 1.6 : 1)
         pauseEndTime = CACurrentMediaTime() + delay
     }
 
@@ -1271,7 +1275,7 @@ class WalkerCharacter {
         }
 
         if isPaused {
-            if now >= pauseEndTime && !isCalm && !isParked {
+            if now >= pauseEndTime && !isCalm {
                 startWalk()
             } else {
                 placeWindow(in: screenFrame)
@@ -1388,5 +1392,26 @@ class WalkerCharacter {
     func leaveCorner() {
         isParked = false
         pauseEndTime = CACurrentMediaTime() + 0.8
+    }
+
+    /// The small play area around the pet's corner spot (normalized).
+    func cozyCornerZone() -> (x: ClosedRange<CGFloat>, y: ClosedRange<CGFloat>) {
+        let home = cornerPoint()
+        guard let frame = activeScreen?.frame else { return (home.x...home.x, home.y...home.y) }
+        let reach = displayWidth * 1.6 / max(frame.width - displayWidth, 1)
+        let x = parkedOnRight ? max(home.x - reach, 0)...home.x : home.x...min(home.x + reach, 1)
+        return (x, home.y...(home.y + 60 / frame.height))
+    }
+
+    private func keepInsideCozyCorner() {
+        let zone = cozyCornerZone()
+        if antic == .stroll || antic == .sneak {
+            walkEndX = .random(in: zone.x)
+            walkEndY = .random(in: zone.y)
+            walkDuration = min(walkDuration, 4.5)
+        }
+        walkEndX = min(max(walkEndX, zone.x.lowerBound), zone.x.upperBound)
+        walkEndY = min(max(walkEndY, zone.y.lowerBound), zone.y.upperBound)
+        if antic != .wiggle { goingRight = walkEndX >= walkStartX }
     }
 }

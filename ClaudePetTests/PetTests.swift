@@ -197,9 +197,26 @@ final class PetTests: XCTestCase {
         XCTAssertEqual(pet.window.frame.minY, screen.visibleFrame.minY, accuracy: 1)
 
         pet.pauseEndTime = 0
-        run(pet, for: 1.0)
-        XCTAssertFalse(pet.isWalking, "a parked pet never wanders off")
+        var played = false
+        var leftZone = false
+        let maxLeft = screen.visibleFrame.maxX - 12 - 160 - 160 * 1.6 - 1
+        let end = Date().addingTimeInterval(6)
+        while Date() < end {
+            pet.update()
+            if pet.isWalking { played = true }
+            let f = pet.window.frame
+            // Hops lift the window up to ~30 pt above the zone's top edge.
+            if f.minX < maxLeft || f.maxX > screen.visibleFrame.maxX - 11 || f.minY < screen.visibleFrame.minY - 1
+                || f.minY > screen.visibleFrame.minY + 60 + 31 { leftZone = true }
+            TestSupport.spin(1.0 / 30)
+            if pet.isPaused { pet.pauseEndTime = 0 }
+        }
+        XCTAssertTrue(played, "a cozy-corner pet still plays")
+        XCTAssertFalse(leftZone, "but never leaves its corner")
 
+        let settled = TestSupport.wait(6) { pet.update(); return !pet.isWalking }
+        XCTAssertTrue(settled)
+        pet.pauseEndTime = CACurrentMediaTime() + 100  // hold still so only the dodge can move her
         let cursor = NSPoint(x: pet.window.frame.midX, y: pet.window.frame.midY)
         pet.cursorLocation = { cursor }
         run(pet, for: 1.3)

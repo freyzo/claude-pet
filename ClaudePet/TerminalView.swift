@@ -38,9 +38,56 @@ final class ChatInputView: NSTextView {
     }
 }
 
+/// The chat transcript; draws a rounded bubble behind each message tagged with `bubbleKey`.
+final class TranscriptView: NSTextView {
+    static let bubbleKey = NSAttributedString.Key("ClaudePetBubble")
+    static let bubblePadding = NSSize(width: 10, height: 6)
+
+    /// One per message, so neighbouring messages get separate bubbles.
+    final class Bubble: NSObject {
+        let fill: NSColor
+        init(fill: NSColor) { self.fill = fill }
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard let storage = textStorage, let layoutManager, let textContainer else { return }
+        let origin = textContainerOrigin
+        storage.enumerateAttribute(Self.bubbleKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+            guard let bubble = value as? Bubble else { return }
+            let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            var box = NSRect.null
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { _, used, _, lineGlyphs, _ in
+                let visible = Self.withoutLineBreak(NSIntersectionRange(lineGlyphs, glyphs), in: layoutManager)
+                guard visible.length > 0 else { return }
+                let ink = layoutManager.boundingRect(forGlyphRange: visible, in: textContainer)
+                box = box.union(NSRect(x: ink.minX, y: used.minY, width: ink.width, height: used.height))
+            }
+            guard !box.isNull else { return }
+            let frame = box.offsetBy(dx: origin.x, dy: origin.y)
+                .insetBy(dx: -Self.bubblePadding.width, dy: -Self.bubblePadding.height)
+            guard frame.intersects(rect) else { return }
+            bubble.fill.setFill()
+            NSBezierPath(roundedRect: frame, xRadius: 12, yRadius: 12).fill()
+        }
+    }
+
+    /// A line's glyphs minus its trailing newline, whose box runs to the edge of the container.
+    static func withoutLineBreak(_ glyphs: NSRange, in layoutManager: NSLayoutManager) -> NSRange {
+        var range = glyphs
+        let text = layoutManager.textStorage?.string as NSString? ?? ""
+        while range.length > 0 {
+            let char = text.character(at: layoutManager.characterIndexForGlyph(at: NSMaxRange(range) - 1))
+            guard char == 10 || char == 13 || char == 0x2028 || char == 0x2029 else { break }
+            range.length -= 1
+        }
+        return range
+    }
+}
+
 class TerminalView: NSView, NSTextViewDelegate {
     let scrollView = NSScrollView()
-    let textView = NSTextView()
+    let textView: NSTextView = TranscriptView(usingTextLayoutManager: false)
     let inputBar = NSView()
     private let inputScroll = NSScrollView()
     let inputField = ChatInputView(frame: .zero)
@@ -272,6 +319,9 @@ class TerminalView: NSView, NSTextViewDelegate {
 
     // Message text lines up under the speaker's name, right of the avatar.
     private static let textIndent: CGFloat = 28
+    // Pet bubbles hug the right edge but never start left of this.
+    private static let petMinLeft: CGFloat = 44
+    private static let userMaxRightGap: CGFloat = 44
     private let bodyFont = TerminalView.roundedFont(13)
     private let codeFont = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
 
@@ -340,24 +390,114 @@ class TerminalView: NSView, NSTextViewDelegate {
         }
         icon.bounds = CGRect(x: 0, y: -5, width: 20, height: 20)
 
-        let header = NSMutableAttributedString(attachment: icon)
-        header.append(NSAttributedString(string: "\t" + (speaker == .pet ? petName : "You") + "\n", attributes: [
-            .font: Self.roundedFont(13, .bold),
-            .foregroundColor: speaker == .pet ? t.accentColor : t.textPrimary
-        ]))
+        let nameFont = Self.roundedFont(13, .bold)
+        let header = NSMutableAttributedString()
         let p = NSMutableParagraphStyle()
-        p.tabStops = [NSTextTab(textAlignment: .left, location: Self.textIndent)]
+        switch speaker {
+        case .pet:
+            header.append(NSAttributedString(string: petName + "\u{2002}", attributes: [.font: nameFont, .foregroundColor: t.accentColor]))
+            header.append(NSAttributedString(attachment: icon))
+            header.append(NSAttributedString(string: "\n", attributes: [.font: nameFont]))
+            p.alignment = .right
+        case .user:
+            header.append(NSAttributedString(attachment: icon))
+            header.append(NSAttributedString(string: "\tYou\n", attributes: [.font: nameFont, .foregroundColor: t.textPrimary]))
+            p.tabStops = [NSTextTab(textAlignment: .left, location: Self.textIndent)]
+        }
         p.paragraphSpacingBefore = (textView.textStorage?.length ?? 0) > 0 ? 16 : 0
-        p.paragraphSpacing = 4
+        p.paragraphSpacing = 2
         header.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: header.length))
         append(header)
     }
 
+    private var transcriptWidth: CGFloat {
+        let container = textView.textContainer
+        let width = (container?.containerSize.width ?? 0) - 2 * (container?.lineFragmentPadding ?? 0)
+        return width > 100 ? width : 360
+    }
+
+    /// Wraps one message in a bubble: the pet's on the right, yours on the left. Text inside stays left-aligned.
+    private func appendBubble(_ text: NSAttributedString, from speaker: Speaker, tint: NSColor? = nil) {
+        let pad = TranscriptView.bubblePadding
+        let out = NSMutableAttributedString(attributedString: text)
+        let full = NSRange(location: 0, length: out.length)
+        guard full.length > 0 else { return }
+        let shift: CGFloat
+        let tail: CGFloat
+        switch speaker {
+        case .pet:
+            let right = transcriptWidth - pad.width
+            let natural = naturalWidth(of: out, limit: right - Self.petMinLeft)
+            shift = max(Self.petMinLeft, floor(right - natural - 1)) - Self.textIndent
+            tail = -pad.width
+        case .user:
+            shift = pad.width - 4
+            tail = -Self.userMaxRightGap
+        }
+        let lastParagraph = (out.string as NSString).paragraphRange(for: NSRange(location: max(0, out.length - 1), length: 0))
+        out.enumerateAttribute(.paragraphStyle, in: full) { value, range, _ in
+            let style = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? paragraph()
+            style.firstLineHeadIndent += shift
+            style.headIndent += shift
+            style.tabStops = style.tabStops.map { NSTextTab(textAlignment: $0.alignment, location: $0.location + shift) }
+            style.tailIndent = tail
+            if range.location == 0 { style.paragraphSpacingBefore += pad.height + 2 }
+            if NSIntersectionRange(range, lastParagraph).length > 0 { style.paragraphSpacing = max(style.paragraphSpacing, pad.height + 6) }
+            out.addAttribute(.paragraphStyle, value: style, range: range)
+        }
+        let t = theme
+        let fill = tint ?? (speaker == .pet ? t.accentColor.withAlphaComponent(0.13) : t.textPrimary.withAlphaComponent(0.07))
+        out.addAttribute(TranscriptView.bubbleKey, value: TranscriptView.Bubble(fill: fill), range: full)
+        append(out)
+    }
+
+    /// Width of the widest line once the message wraps inside `limit`, ignoring the default indent.
+    private func naturalWidth(of text: NSAttributedString, limit: CGFloat) -> CGFloat {
+        let rebased = NSMutableAttributedString(attributedString: text)
+        rebased.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: rebased.length)) { value, range, _ in
+            guard let style = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle else { return }
+            style.firstLineHeadIndent -= Self.textIndent
+            style.headIndent -= Self.textIndent
+            style.tabStops = style.tabStops.map { NSTextTab(textAlignment: $0.alignment, location: $0.location - Self.textIndent) }
+            rebased.addAttribute(.paragraphStyle, value: style, range: range)
+        }
+        let storage = NSTextStorage(attributedString: rebased)
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: limit, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        var width: CGFloat = 0
+        layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: container)) { _, _, _, glyphs, _ in
+            let visible = TranscriptView.withoutLineBreak(glyphs, in: layout)
+            guard visible.length > 0 else { return }
+            width = max(width, layout.boundingRect(forGlyphRange: visible, in: container).maxX)
+        }
+        return ceil(min(width, limit))
+    }
+
+    /// Tool steps are one quiet line each on the pet's side; hover shows the full command.
+    private func appendToolRow(_ line: NSMutableAttributedString, fullText: String) {
+        let p = NSMutableParagraphStyle()
+        p.alignment = .right
+        p.tailIndent = -TranscriptView.bubblePadding.width
+        p.paragraphSpacing = 3
+        let range = NSRange(location: 0, length: line.length)
+        line.addAttribute(.paragraphStyle, value: p, range: range)
+        if !fullText.isEmpty { line.addAttribute(.toolTip, value: fullText, range: range) }
+        append(line)
+    }
+
+    private static func oneLine(_ text: String, limit: Int = 44) -> String {
+        let first = text.split(separator: "\n").first.map(String.init) ?? ""
+        return first.count > limit ? String(first.prefix(limit - 1)) + "…" : first
+    }
+
     func appendUser(_ text: String) {
         beginTurn(.user)
-        append(NSAttributedString(string: text + "\n", attributes: [
+        appendBubble(NSAttributedString(string: text + "\n", attributes: [
             .font: bodyFont, .foregroundColor: theme.textPrimary, .paragraphStyle: paragraph()
-        ]))
+        ]), from: .user)
         scrollToBottom()
     }
 
@@ -369,15 +509,15 @@ class TerminalView: NSView, NSTextViewDelegate {
         currentAssistantText += cleaned
         guard !cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         beginTurn(.pet)
-        append(renderMarkdown(cleaned))
+        appendBubble(renderMarkdown(cleaned), from: .pet)
         scrollToBottom()
     }
 
     func appendError(_ text: String) {
         beginTurn(.pet)
-        append(NSAttributedString(string: text.trimmingCharacters(in: .whitespacesAndNewlines) + "\n", attributes: [
+        appendBubble(NSAttributedString(string: text.trimmingCharacters(in: .whitespacesAndNewlines) + "\n", attributes: [
             .font: bodyFont, .foregroundColor: theme.errorColor, .paragraphStyle: paragraph()
-        ]))
+        ]), from: .pet, tint: theme.errorColor.withAlphaComponent(0.12))
         scrollToBottom()
     }
 
@@ -385,30 +525,32 @@ class TerminalView: NSView, NSTextViewDelegate {
         let t = theme
         beginTurn(.pet)
         let line = NSMutableAttributedString(string: toolName + "  ", attributes: [
-            .font: Self.roundedFont(11.5, .semibold), .foregroundColor: t.accentColor
+            .font: Self.roundedFont(11, .semibold), .foregroundColor: t.accentColor
         ])
-        line.append(NSAttributedString(string: summary + "\n", attributes: [.font: codeFont, .foregroundColor: t.textDim]))
-        line.addAttribute(.paragraphStyle, value: paragraph(after: 2), range: NSRange(location: 0, length: line.length))
-        append(line)
+        line.append(NSAttributedString(string: Self.oneLine(summary) + "\n", attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular), .foregroundColor: t.textDim
+        ]))
+        appendToolRow(line, fullText: summary)
         scrollToBottom()
     }
 
     func appendToolResult(summary: String, isError: Bool) {
         let t = theme
         beginTurn(.pet)
-        let line = NSMutableAttributedString(string: isError ? "✕  " : "✓  ", attributes: [
-            .font: Self.roundedFont(11.5, .bold), .foregroundColor: isError ? t.errorColor : t.successColor
+        let line = NSMutableAttributedString(string: isError ? "✕ " : "✓ ", attributes: [
+            .font: Self.roundedFont(11, .bold), .foregroundColor: isError ? t.errorColor : t.successColor
         ])
         let detail = summary.isEmpty ? (isError ? "failed" : "done") : summary
-        line.append(NSAttributedString(string: detail + "\n", attributes: [.font: codeFont, .foregroundColor: t.textDim]))
-        line.addAttribute(.paragraphStyle, value: paragraph(after: 5), range: NSRange(location: 0, length: line.length))
-        append(line)
+        line.append(NSAttributedString(string: Self.oneLine(detail) + "\n", attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular), .foregroundColor: t.textDim
+        ]))
+        appendToolRow(line, fullText: detail)
         scrollToBottom()
     }
 
     func appendNotice(_ markdown: String) {
         beginTurn(.pet)
-        append(renderMarkdown(markdown))
+        appendBubble(renderMarkdown(markdown), from: .pet)
         scrollToBottom()
     }
 
@@ -422,7 +564,7 @@ class TerminalView: NSView, NSTextViewDelegate {
                 appendUser(msg.text)
             case .assistant:
                 beginTurn(.pet)
-                append(renderMarkdown(msg.text))
+                appendBubble(renderMarkdown(msg.text), from: .pet)
             case .error:
                 appendError(msg.text)
             case .notice:
@@ -540,12 +682,14 @@ class TerminalView: NSView, NSTextViewDelegate {
         // Pad every line to the same width so the background reads as one box.
         let width = min(lines.map(\.count).max() ?? 0, 80)
         for (index, line) in lines.enumerated() {
-            let padded = " " + line.padding(toLength: max(width, line.count), withPad: " ", startingAt: 0) + " \n"
+            let padded = " " + line.padding(toLength: max(width, line.count), withPad: " ", startingAt: 0) + " "
             let p = paragraph(before: index == 0 ? 4 : 0, after: index == lines.count - 1 ? 8 : 0)
             p.lineSpacing = 1
             out.append(NSAttributedString(string: padded, attributes: [
                 .font: codeFont, .foregroundColor: t.textPrimary, .backgroundColor: t.inputBg, .paragraphStyle: p
             ]))
+            // Shading the newline would run the box to the edge of the view.
+            out.append(NSAttributedString(string: "\n", attributes: [.font: codeFont, .paragraphStyle: p]))
         }
         return out
     }

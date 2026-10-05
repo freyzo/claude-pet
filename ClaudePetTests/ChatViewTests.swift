@@ -96,10 +96,22 @@ final class ChatViewTests: XCTestCase {
         storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, _, _ in
             if value != nil { attachments += 1 }
         }
-        XCTAssertEqual(text.components(separatedBy: "\tStitch\n").count - 1, 2, "one pet header per pet turn")
+        XCTAssertEqual(text.components(separatedBy: "Stitch\u{2002}\u{FFFC}\n").count - 1, 2, "one pet header per pet turn")
         XCTAssertEqual(text.components(separatedBy: "\tYou\n").count - 1, 2)
         XCTAssertEqual(attachments, 4, "every header has an avatar")
         XCTAssertFalse(text.contains("**"), "markdown markers must not show")
+
+        func style(of snippet: String) -> (indent: CGFloat, inBubble: Bool) {
+            let at = (text as NSString).range(of: snippet).location
+            let p = storage.attribute(.paragraphStyle, at: at, effectiveRange: nil) as? NSParagraphStyle
+            return (p?.firstLineHeadIndent ?? 0, storage.attribute(TranscriptView.bubbleKey, at: at, effectiveRange: nil) != nil)
+        }
+        XCTAssertGreaterThan(style(of: "answer").indent, 150, "a short pet reply hugs the right side")
+        XCTAssertLessThan(style(of: "again").indent, 50, "your messages stay on the left")
+        XCTAssertTrue(style(of: "answer").inBubble)
+        XCTAssertTrue(style(of: "again").inBubble)
+        XCTAssertEqual((storage.attribute(.paragraphStyle, at: (text as NSString).range(of: "Stitch").location,
+                                          effectiveRange: nil) as? NSParagraphStyle)?.alignment, .right)
     }
 
     func testMarkdownIsFormattedNotShownRaw() {
