@@ -18,5 +18,25 @@
             5. Upload zip to GitHub Releases (github.com/freyzo/claude-pet)
             6. Commit appcast.xml and push to main (the app reads it from raw.githubusercontent.com)
         -->
+        <item>
+            <title>Version 1.1.0</title>
+            <pubDate>Sun, 04 Oct 2026 17:25:00 -0700</pubDate>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[
+                <ul>
+                    <li>Two pets: Stitch and the Claude robot</li>
+                    <li>GitHub Copilot chat (default), or Claude Code</li>
+                    <li>Chat bubbles with your pet's avatar</li>
+                    <li>Cozy Corner: pets play in a corner, out of your way</li>
+                    <li>Pets dodge your cursor and rest when your Mac needs it</li>
+                </ul>
+            ]]></description>
+            <enclosure url="https://github.com/freyzo/claude-pet/releases/download/v1.1.0/claude-pet-1.1.0.dmg"
+                       sparkle:edSignature="7vYTNqaw3RIeKjwDle72rNE6M7aJBBschMlQOUGsbnWknyH8oVHvfXojS4xA+O3v1cYfHoKfLLP5jDBcew54Bg=="
+                       length="3675588"
+                       type="application/octet-stream"/>
+        </item>
     </channel>
 </rss>

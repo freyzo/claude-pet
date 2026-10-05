@@ -1,50 +1,55 @@
 # claude-pet
 
-Desktop pet + Claude CLI on macOS.
+Desktop pets + an AI chat on macOS.
 
 ![demo](./docs/media/stitchAgent.gif)
 ![claude](./docs/media/claude.png)
 
-A naughty little pet roams your desktop.
-Click it to chat with Claude Code. Hover it to say hi.
+Two naughty little pets roam your desktop.
+Click one to chat with GitHub Copilot or Claude Code. Hover it to say hi.
 
 ## What It Does
 
-- A Stitch pet that roams your desktop: zoomies, hops, wiggle dances, sneaking around, chasing your cursor (and sometimes running away from it)
-- Hover reactions with sounds
-- Click to open a chat with [Claude Code](https://claude.ai/download); the pet sits still while you chat
-- Name your pet whatever you like (menu bar icon → **Rename Pet…**)
-- Draggable pet and chat box (they stay where you drop them)
+- Two pets, Stitch and the Claude robot: zoomies, hops, wiggle dances, sneaking around, chasing your cursor (and sometimes running away from it)
+- They hop out of your way when your cursor rests on them
+- **Cozy Corner**: send a pet to a bottom corner, where it keeps playing without getting in your way
+- Click a pet to chat; replies come in easy-to-read chat bubbles with the pet's avatar
+- Pick the assistant: **GitHub Copilot** (default) or **Claude Code** (menu bar icon → **Assistant**)
+- Name your pets whatever you like (menu bar icon → **Rename Pet**)
+- **Pause Pets** (⌘P); pets also calm down on Low Power Mode, Reduce Motion, or when your Mac is hot
+- Draggable pets and chat box (they stay where you drop them)
 - Styles, sounds, and a choice of display
 
 ## Requirements
 
 - macOS 14+
-- To chat: [Claude Code](https://claude.ai/download), installed and logged in (Claude account or API key)
+- To chat, one of:
+  - [GitHub Copilot CLI](https://github.com/github/copilot-cli), installed and logged in (`brew install --cask copilot-cli`, then `copilot login`)
+  - [Claude Code](https://claude.ai/download), installed and logged in
 
-Without Claude Code the pet still works; the chat shows **offline** with a one-click fix to install Claude Code or log in.
+Without either, the pets still work; the chat shows **offline** with a one-click fix to install or log in.
 
 ## Quick Start
 
 1. Go to [Releases](https://github.com/freyzo/claude-pet/releases)
 2. Download the latest `.dmg`
 3. Open the DMG and move `claude-pet` to `Applications`
-4. Launch `claude-pet` from `Applications`
+4. The app isn't notarized yet, so the first time: right-click `claude-pet` in `Applications` → **Open** → **Open**
 
 Or build from source (needs Xcode):
 
 1. Run `./scripts/build --open`, or open `claude-pet.xcodeproj` in Xcode and run the `claude-pet` scheme
 2. Look for the pet icon in your menu bar
 
-## Heads-up: Claude Can Change Files
+## Heads-up: The Assistant Can Change Files
 
-The chat runs Claude Code with `--dangerously-skip-permissions`, starting in your home folder. Claude can run commands and create, edit or delete files **without asking first**. Only ask for things you'd be happy for it to do unattended.
+With **Allow Edits & Commands** on (the default), the assistant can run commands and create, edit or delete files in its folder **without asking first**. It starts in your home folder; pick another one from menu bar icon → **Assistant** → **Choose Folder…**. Turn **Allow Edits & Commands** off for read-only chat.
 
 ## Privacy
 
 - No analytics, no account with this app
-- The pet runs entirely on your Mac
-- Chat goes through your local Claude Code, which sends your messages to Anthropic
+- The pets run entirely on your Mac
+- Chat goes through your local Copilot CLI or Claude Code, which send your messages to GitHub or Anthropic
 - The app checks for updates in the background (Sparkle)
 
 
